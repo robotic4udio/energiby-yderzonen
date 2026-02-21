@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../../../Documents/Arduino"
+		},
+		{
+			"path": "../../../../../../Applications/Teensyduino.app/Contents/Java/hardware/teensy"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"algorithm": "cpp",
+			"bitset": "cpp",
+			"memory": "cpp",
+			"optional": "cpp",
+			"random": "cpp",
+			"__locale": "cpp"
+		}
+	}
+}
