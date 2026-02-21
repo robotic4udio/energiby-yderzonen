@@ -20,7 +20,7 @@ import json
 plt.rcParams['toolbar'] = 'None'
 
 
-oscSenderTeensy = udp_client.SimpleUDPClient("192.168.0.102",7134)
+oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
 
 # Variables used for the live plot
 global x_values, y_values, bio_raw, index, run, t, td
