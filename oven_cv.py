@@ -9,6 +9,29 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import List, Optional
+import tkinter as tk
+import multiprocessing
+import time
+
+
+def load_video_frames(path: str, frame_width: int, frame_height: int) -> Optional[List[np.ndarray]]:
+    """Load all frames from a video file into RAM with resizing."""
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return None
+    
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Resize to output dimensions (using nearest neighbor for faster performance)
+        frame = cv2.resize(frame, (frame_width, frame_height), interpolation=cv2.INTER_NEAREST)
+        frames.append(frame)
+    
+    cap.release()
+    return frames if frames else None
 
 
 class OvenVideoMixer:
@@ -35,37 +58,19 @@ class OvenVideoMixer:
         self.frame_height = frame_height
         self.video_names = ["low", "medium", "high", "overdrive"]
         
-        # Load all videos into RAM
+        # Load all videos into RAM in parallel
         print("Loading videos into RAM...")
-        self.frames = []
         
-        for i, path in enumerate(video_paths):
-            print(f"  Loading {self.video_names[i]}: {path}")
-            frames = self._load_video(path)
+        with multiprocessing.Pool(processes=4) as pool:
+            results = pool.starmap(load_video_frames, [(path, self.frame_width, self.frame_height) for path in video_paths])
+        
+        self.frames = results
+        for i, frames in enumerate(results):
             if not frames:
-                raise RuntimeError(f"Failed to load video {i}: {path}")
-            self.frames.append(frames)
+                raise RuntimeError(f"Failed to load video {i}: {video_paths[i]}")
+            print(f"  Loaded {self.video_names[i]}: {len(frames)} frames")
         
         print(f"  Loaded {len(self.frames)} videos")
-    
-    def _load_video(self, path: str) -> Optional[List[np.ndarray]]:
-        """Load all frames from a video file into RAM."""
-        cap = cv2.VideoCapture(str(path))
-        if not cap.isOpened():
-            return None
-        
-        frames = []
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Resize to output dimensions
-            frame = cv2.resize(frame, (self.frame_width, self.frame_height))
-            frames.append(frame)
-        
-        cap.release()
-        return frames if frames else None
     
     def _get_frame(self, video_idx: int, frame_num: int) -> np.ndarray:
         """Get a looping frame from a video."""
@@ -148,11 +153,17 @@ def main():
         print(f"Error: Missing video files: {missing_videos}")
         return
     
+    # Get screen resolution for fullscreen scaling
+    root = tk.Tk()
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    root.destroy()
+    
     # Create mixer
     mixer = OvenVideoMixer(
         video_paths=video_paths,
-        frame_width=720,
-        frame_height=1280
+        frame_width=screen_width,
+        frame_height=screen_height
     )
     
     print("Starting video playback...")
@@ -166,11 +177,15 @@ def main():
     intensity = 0.5
     test_mode = False
     test_speed = 0.01
+    prev_time = time.time()
+    last_fps = 30.0
     
     # Create fullscreen window
-    cv2.namedWindow("Oven Video Mixer", cv2.WINDOW_FULLSCREEN)
+    cv2.namedWindow("Oven Video Mixer", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("Oven Video Mixer", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     
     while True:
+        loop_start = time.time()
         # Get current frame
         frame = mixer.get_frame(frame_num, intensity)
         
@@ -198,7 +213,7 @@ def main():
         frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
         
         # Add text
-        text = f"Intensity: {intensity:.2f}"
+        text = f"Intensity: {intensity:.2f} FPS: {last_fps:.1f}"
         if test_mode:
             text += " [TEST MODE]"
         cv2.putText(
@@ -214,8 +229,20 @@ def main():
         # Display
         cv2.imshow("Oven Video Mixer", frame)
         
+        # Calculate FPS
+        current_time = time.time()
+        fps = 1 / (current_time - prev_time) if (current_time - prev_time) > 0 else 30.0
+        prev_time = current_time
+        last_fps = fps
+        
+        # Adjust wait time to maintain 30 fps
+        elapsed = time.time() - loop_start
+        target_fps = 30.0
+        target_time = 1 / target_fps
+        wait_ms = max(1, int((target_time - elapsed) * 1000))
+        
         # Handle input
-        key = cv2.waitKey(30) & 0xFF
+        key = cv2.waitKey(wait_ms) & 0xFF
         
         if key == ord('q') or key == 27:  # Q or ESC
             break
