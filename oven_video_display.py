@@ -141,10 +141,10 @@ def main():
     """Real-time oven video mixer with intensity control."""
     
     video_paths = [
-        "oven_low.mp4",
-        "oven_medium.mp4",
-        "oven_high.mp4",
-        "oven_overdrive.mp4",
+        "/home/radius/repositories/energiby-yderzonen/oven_low.mp4",
+        "/home/radius/repositories/energiby-yderzonen/oven_medium.mp4",
+        "/home/radius/repositories/energiby-yderzonen/oven_high.mp4",
+        "/home/radius/repositories/energiby-yderzonen/oven_overdrive.mp4",
     ]
     
     # Check if videos exist

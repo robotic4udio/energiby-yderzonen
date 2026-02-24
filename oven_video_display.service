@@ -1,0 +1,17 @@
+[Unit]
+Description=Start Video Display for the Oven in YderZonen Energiby
+After=sound.target
+Wants=sound.target
+
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/radius/.Xauthority
+ExecStart=/usr/bin/python3 /home/radius/repositories/energiby-yderzonen/oven_video_display.py
+Restart=always
+RestartSec=10s
+KillMode=process
+TimeoutSec=infinity
+
+[Install]
+WantedBy=graphical.target
+
