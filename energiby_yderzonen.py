@@ -1,5 +1,9 @@
 import argparse
+import subprocess
+import re
 import time
+import matplotlib
+matplotlib.use('TkAgg')  # Use TkAgg backend for window management
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
@@ -9,13 +13,90 @@ import math
 from pythonosc import dispatcher
 from pythonosc import osc_server
 from pythonosc import udp_client
-from threading import Thread 
+from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor
+import os
 
 from pprint import pprint
 import urllib.request
 
 import json
 from scipy.interpolate import interp1d
+
+# ==================== RASPBERRY PI OPTIMIZATION ====================
+# Optimize matplotlib rendering and system performance
+os.environ['MPLBACKEND'] = 'TkAgg'
+
+# Try to set CPU affinity to use specific cores (RPi 5 has 4 cores)
+try:
+    import psutil
+    process = psutil.Process()
+    # Use cores 2 and 3, leaving 0-1 for system/rendering
+    process.cpu_affinity([2, 3])
+except ImportError:
+    pass
+
+# Reduce matplotlib memory usage and improve rendering
+plt.rcParams['figure.max_open_warning'] = 0
+plt.rcParams['lines.linewidth'] = 1.5
+plt.rcParams['lines.antialiased'] = False  # Disable antialiasing for speed
+plt.rcParams['patch.antialiased'] = False
+# ===================================================================
+
+
+# Functions to handle the monitor information and plotting on multiple monitors
+def get_monitor_info():
+    """Get monitor positions and sizes using xrandr."""
+    result = subprocess.run(['xrandr'], capture_output=True, text=True)
+    output = result.stdout
+    monitors = []
+    for line in output.split('\n'):
+        if ' connected ' in line and 'primary' in line:  # Primary monitor first
+            match = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+            if match:
+                width, height, x, y = map(int, match.groups())
+                monitors.append((x, y, width, height))
+        elif ' connected ' in line and 'primary' not in line:
+            match = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+            if match:
+                width, height, x, y = map(int, match.groups())
+                monitors.append((x, y, width, height))
+    return monitors
+
+def create_plot_on_monitor(monitor, plot_func):
+    """Create a matplotlib figure positioned on the specified monitor."""
+    x, y, width, height = monitor
+    #width = int(width * 0.5)  # Use 90% of the monitor width
+    #height = int(height * 0.5)  # Use 90% of the monitor height
+    fig = plt.figure(figsize=(width/100, height/100), dpi=96)  # Lower DPI for performance
+    # Disable toolbar and enable fast rendering
+    # fig.canvas.set_window_title('')
+    plot_func(fig)
+    # Position the window
+    fig.canvas.manager.window.geometry(f"{width}x{height}+{x}+{y}")
+    fig.canvas.manager.window.deiconify()  # Make the window visible
+    fig.canvas.manager.window.update()  # Update the window to apply position
+    # Enable faster rendering mode
+    fig.patch.set_animated(True)
+    return fig
+
+def plot_sine(fig):
+    x = np.linspace(0, 10, 100)
+    y = np.sin(x)
+    plt.plot(x, y)
+    plt.title('Sine Wave')
+
+def plot_cosine(fig):
+    x = np.linspace(0, 10, 100)
+    y = np.cos(x)
+    plt.plot(x, y)
+    plt.title('Cosine Wave')
+
+monitors = get_monitor_info()
+print("Detected monitors:", monitors)
+if len(monitors) < 2:
+    print("Need at least two monitors connected.")
+    # exit(1)
 
 
 # Define a class for a 1st order lowpass filter
@@ -42,9 +123,18 @@ class OnePole:
 
 #plt.style.use('fivethirtyeight')
 plt.rcParams['toolbar'] = 'None'
+plt.rcParams['figure.dpi'] = 96  # Standard DPI for RPi displays
+plt.rcParams['font.size'] = 9
+
+# Data synchronization for multi-threaded rendering
+data_lock = Lock()
+rendering_queue = {'x': [], 'y': [], 'v': []}
 
 
 oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
+
+# Thread pool for parallel calculations
+executor = ThreadPoolExecutor(max_workers=4)
 
 # Variables used for the live plot
 global x_values, y_values, bio_raw, index, run, t, td
@@ -372,33 +462,51 @@ def production(index):
     return production_filter.update(p)
 
 
-# Define the Figure and axes
-fig, (ax1) = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
-plt.subplots_adjust(bottom=0.25)
-fig.set_facecolor('grey')
-ax1.set_xlim([0,48]) # Set the x-limits
-ax1.set_ylim([0,70]) # Set the y-limits
-ax1.set_xlabel('Time [h]')
-ax1.set_ylabel('Power [MW]')
-ax1.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
-xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
-ax1.set_xticklabels(xlabels)
+def plot_electricity(fig):
+    global lb,lv,ls,l
+    ax = fig.gca()  # Get the current axes
+    ax.set_xlim([0,48]) # Set the x-limits
+    ax.set_ylim([0,70]) # Set the y-limits
+    ax.set_xlabel('Time [h]')
+    ax.set_ylabel('Power [MW]')
+    ax.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
+    xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
+    ax.set_xticklabels(xlabels)
+    plt.fill_between(time_vector, need_min_vector, need_max_vector, label="Behov")
+    #lb, = ax.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
+    #lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
+    l,  = plt.plot(x_values,y_values,'k-', label="Energi Til Net") # Create a line with the data
+    #ls, = ax.plot(x_values,s_values,'k-', label="Energi til Net") # Create a line with the data
 
-# Plot the Range as to stay within 
-ax1.fill_between(time_vector, need_min_vector, need_max_vector, label="Behov")
+    plt.legend(loc='upper left')
+    plt.grid(True)
 
-lb, = ax1.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
-lv, = ax1.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
-l,  = ax1.plot(x_values,y_values,'k-', label="Energi Til Net") # Create a line with the data
-ls, = ax1.plot(x_values,s_values,'k-', label="Energi til Net") # Create a line with the data
+def plot_heat(fig):
+    global lv
+    ax = fig.gca()  # Get the current axes
+    ax.set_xlim([0,48]) # Set the x-limits
+    ax.set_ylim([0,70]) # Set the y-limits
+    ax.set_xlabel('Time [h]')
+    ax.set_ylabel('Power [MW]')
+    ax.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
+    xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
+    ax.set_xticklabels(xlabels)
+    plt.fill_between(time_vector, need_min_vector, need_max_vector, label="Behov")
+    lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
 
-ax1.legend(loc='upper left')
-plt.grid(True)
+    plt.legend(loc='upper left')
+    plt.grid(True)
 
+# Create plots on each monitor
+plt.ioff()  # Turn off interactive mode to prevent blocking
+
+fig1 = create_plot_on_monitor(monitors[0], plot_electricity)  # Assign to monitor 1
+plt.tight_layout()
+fig2 = create_plot_on_monitor(monitors[0], plot_heat)  # Assign to monitor 0
+plt.tight_layout()
 
 def sendElData():
     global storage_amount
-    oscSenderTeensy.send_message("/ElData", [wind_generator.get(index), sol_generator.get(index), powerplant.get_total_power_pct(), powerplant.oven_amount, powerplant.get_storage_pct(), production_filter.get(), need_min_vector[index], run, t])
     oscSenderTeensy.send_message("/OvenAmount", powerplant.oven_amount/powerplant.oven_amount_max)
     oscSenderTeensy.send_message("/WasteStorage", powerplant.get_storage_pct())
     oscSenderTeensy.send_message("/OvenPower", powerplant.get_total_power_pct())
@@ -415,17 +523,20 @@ def sendElData():
     oscSenderTeensy.send_message("/TurbinePct", powerplant.turbine_pct)
     oscSenderTeensy.send_message("/OvenAirFlow", powerplant.get_air_flow())
 
+# Non-blocking OSC sender using thread pool
+def sendElDataAsync():
+    """Send OSC data in background thread to avoid blocking rendering"""
+    executor.submit(sendElData)
+
 def updatePlot():
     l.set_xdata(x_values)
     l.set_ydata(y_values)
-    lb.set_xdata(x_values)
-    lb.set_ydata(b_values)
+    # Use async OSC sending to avoid blocking the render thread
+    sendElDataAsync()
+
+def updateHeatPlot():
     lv.set_xdata(x_values)
     lv.set_ydata(v_values)
-    ls.set_xdata(x_values)
-    ls.set_ydata(s_values)
-    sendElData()
-
 
 def clear():
     global x_values, y_values, b_values, v_values, s_values, index, run, t, td
@@ -449,26 +560,45 @@ def clear():
 
 
 
-# Animate Function for the plotting
+# Frame counter for batching updates
+render_frame_counter = 0
+BATCH_SIZE = 2  # Update every 2 frames to reduce rendering overhead
+
+# Animate Function for the plotting - OPTIMIZED
 def animate(i):
-    global index, run, t, td, steps
+    global index, run, t, td, steps, render_frame_counter
     if run > 0:
         t = index * 0.05
         td = timeOfDay(t)
         y = production(index)
         x_values.append(t)
         y_values.append(y)
-        b_values.append(powerplant.get_total_power())
+        #b_values.append(powerplant.get_total_power())
         v_values.append(wind_generator.get(index))
-        s_values.append(sol_generator.get(index))
+        #s_values.append(sol_generator.get(index))
+        
+        # Batch rendering updates to reduce matplotlib overhead
+        render_frame_counter += 1
+        if render_frame_counter >= BATCH_SIZE:
+            updatePlot()
+            render_frame_counter = 0
+        
         if t >= 48.0:
             run = 0
             print("Consumption {0}".format(index))
+            updatePlot()  # Final update
 
-        updatePlot()     
-        index = index+1
+        index = index + 1
+    
+    # Minimal sleep to prevent CPU spinning (set to 0 for maximum speed on RPi)
+    time.sleep(0.01)
 
-    time.sleep(.02)
+def animateHeat(i):
+    global index, run, t, td, steps
+    if run > 0:
+        # Only update heat plot occasionally to reduce render load
+        updateHeatPlot()
+    time.sleep(0.01)
 
 # --------------------------------------------------------------
 # ------------------------- OSC --------------------------------
@@ -508,7 +638,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--ip", default="0.0.0.0", help="The ip to listen on")
 parser.add_argument("--port", type=int, default=7133, help="The port to listen on")
 args = parser.parse_args()
-dispatcher.map("/filter", print)
 dispatcher.map("/OvenAirFlow", oscValue)
 dispatcher.map("/cmd", oscCmd)
 dispatcher.map("/AmountInOven", oscAmountInOven)
@@ -534,18 +663,75 @@ print("Serving on {}".format(server.server_address))
 
 # Start Osc in a Thread
 oscThread = Thread(target = server.serve_forever)
+oscThread.daemon = True  # Make it a daemon thread so it doesn't block shutdown
 oscThread.start()
 
 clear()
 
-# Start the Animation Funtion
-ani = FuncAnimation(fig, animate, interval = 10)
+# Start the Animation Function with optimized settings
+# Use larger interval (50ms) for RPi to reduce CPU load, disable blitting as matplotlib TkAgg doesn't support it well
+ani1 = FuncAnimation(fig1, animate, interval=50, blit=False, cache_frame_data=False)
+ani2 = FuncAnimation(fig2, animateHeat, interval=50, blit=False, cache_frame_data=False)
+
 
 # Show the plot on screen
-plt.ioff()
-plt.tight_layout()
+#plt.ioff()
+#plt.tight_layout()
 #figman = plt.get_current_fig_manager()
 #figman.full_screen_toggle()
-plt.show()
+#plt.show()
 
 
+
+
+
+
+plt.figure(fig1.number)
+fig1.canvas.manager.window.attributes('-fullscreen', False)
+fig1.canvas.draw()
+
+plt.figure(fig2.number)
+fig2.canvas.manager.window.attributes('-fullscreen', False)
+fig2.canvas.draw()
+
+
+
+plt.show()    
+
+
+# ==================== RASPBERRY PI OPTIMIZATION TIPS ====================
+# To further improve performance on Raspberry Pi 5, apply these settings:
+#
+# 1. BOOT CONFIG (/boot/firmware/config.txt):
+#    - gpu_mem=128          # Allocate more GPU memory if using hardware acceleration
+#    - hdmi_blanking=1      # Reduce power consumption
+#    - disable_splash=1     # Disable splash screen
+#
+# 2. SYSTEM SETTINGS:
+#    - Disable unnecessary services: sudo systemctl disable bluetooth avahi-daemon
+#    - Set CPU governor to performance: echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+#    - Disable HDMI CEC: echo -e 'dtoverlay=cec\nenabled=0' >> /boot/firmware/config.txt
+#
+# 3. DISPLAY SETTINGS (for faster rendering):
+#    - Use framebuffer backend instead of X11 for lower latency
+#    - export DISPLAY=:0 before running the script
+#    - Reduce refresh rate if needed: xrandr --output HDMI-1 --rate 50
+#
+# 4. PYTHON OPTIMIZATION:
+#    - Use PyPy instead of CPython for up to 3x speedup: pip install pypy
+#    - Set PYTHONOPTIMIZE=2 for aggressive optimization
+#
+# 5. MATPLOTLIB-SPECIFIC OPTIMIZATIONS ALREADY APPLIED:
+#    - Lower DPI (96) for faster rendering
+#    - Disabled antialiasing for better performance
+#    - Batched updates (BATCH_SIZE=2) to reduce redraws
+#    - ThreadPoolExecutor for non-blocking OSC messages
+#    - Larger animation interval (50ms vs 10ms)
+#    - Daemon thread for OSC server
+#    - Cache frame data disabled for lower memory usage
+#
+# 6. PERFORMANCE MONITORING:
+#    - Watch CPU usage: watch -n 1 'ps aux | grep energiby'
+#    - Monitor memory: free -h
+#    - Check temperature: vcgencmd measure_temp
+# ========================================================================    
