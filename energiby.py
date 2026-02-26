@@ -112,10 +112,11 @@ def fillOven():
 # ------------------------------------------------------------------------------------------- #
 # ---------------------------------- Vind generator ----------------------------------------- #
 # ------------------------------------------------------------------------------------------- #
+vind_max    = 35.0 # Max Vind Power in MW
 vind_n      = 0
 vind_N      = 15
-vind_mean   = 20
-vind_sd     = 15
+vind_mean   = 20.0
+vind_sd     = 15.0
 vind_alpha  = 0.01 # Alpha value for 1st order lowpass filter
 vind_a1     = 0.1  # 
 vind_v1     = vind_mean
@@ -329,6 +330,12 @@ plt.grid(True)
 
 def sendElData():
     oscSenderTeensy.send_message("/ElData", [vind_vector[index], sol_vector[index], bio_value/bio_max, oven_amount, storage_amount, production_value, need_min_vector[index], run, silo_amount_pct(), t])
+    oscSenderTeensy.send_message("/OvenAmount", oven_amount/oven_amount_max)
+    oscSenderTeensy.send_message("/WasteStorage", storage_amount/storage_amount_max)
+    oscSenderTeensy.send_message("/OvenPower", bio_value/bio_max)
+    oscSenderTeensy.send_message("/WindPower", vind_vector[index]/vind_max)
+    oscSenderTeensy.send_message("/SunPower", sol_vector[index]/sol_max)
+
 
 def updatePlot():
     l.set_xdata(x_values)
@@ -442,9 +449,18 @@ parser.add_argument("--ip", default="0.0.0.0", help="The ip to listen on")
 parser.add_argument("--port", type=int, default=7133, help="The port to listen on")
 args = parser.parse_args()
 dispatcher.map("/filter", print)
-dispatcher.map("/value", oscValue)
+dispatcher.map("/OvenAirFlow", oscValue)
 dispatcher.map("/cmd", oscCmd)
 dispatcher.map("/AmountInOven", oscAmountInOven)
+
+# Print all incoming messages
+def print_handler(address, *args):
+    print(f"Received message: {address} {args}")
+
+
+# Set default handler
+dispatcher.set_default_handler(print_handler)
+
 
 server = osc_server.ThreadingOSCUDPServer((args.ip, args.port), dispatcher)
 print("Serving on {}".format(server.server_address))
