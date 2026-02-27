@@ -96,6 +96,9 @@ class OnePole:
     def __init__(self, alpha, initial_value):
         self.alpha = alpha
         self.value = initial_value
+
+    def set_alpha(self, alpha):
+        self.alpha = alpha
     
     def update(self, new_value):
         self.value = new_value * self.alpha + self.value * (1 - self.alpha)
@@ -192,12 +195,7 @@ class EnergyRequirements:
     def get_total_need_at(self, index):
         return self.electricity.need_vector[index] + self.heat.need_vector[index]
 
-# Create an instance of EnergyRequirements
-requirements = EnergyRequirements()
 
-# debugging prints
-print(requirements.electricity.hours_vector.shape)
-print(requirements.electricity.mw_needed.shape)
 
 def timeOfDay(t):
     while(t > 24.0):
@@ -273,10 +271,10 @@ class WindGenerator:
 # ------------------------------------------------------------------------------------------- #
 class SunGenerator:
     def __init__(self):
-        self.alpha = 0.1  # Alpha value for 1st order lowpass filter
         # use the current average electricity demand for scaling
-        self.max = 0.07 * requirements.electricity.mw_needed.mean()
-        self.v1 = 0.0
+        self.max = 0.07 * 35 # Max Solar Power in MW, scaled to be a fraction of the average electricity demand
+        self.f1 = OnePole(0.1, 0.0)
+        self.f2 = OnePole(0.1, self.f1.get())
         self.power = 0.0
         self.vector = np.zeros(N)
         self.active = True
@@ -288,19 +286,21 @@ class SunGenerator:
         sol = 0.0
         sol_alpha = 0.1
         if td > 5 and td < 13:
-            sol = 1.0
+            sol = self.max
         else:
             sol = 0.0
             sol_alpha = 0.05
         
-        sol *= self.max
-        self.v1 = sol * sol_alpha + self.v1 * (1 - sol_alpha)  # Compute 1st lowpass filter
-        self.power = self.v1 * sol_alpha + self.power * (1 - sol_alpha)  # Compute 2nd lowpass filter
+        # Two stage lowpass filter to create a smoother curve
+        sol = self.f1.update_alpha(sol, sol_alpha)
+        sol = self.f2.update_alpha(sol, sol_alpha)
+
+        self.power = sol
+        
         return self.power
     
     def make_new_vector(self):
-        self.power = 0
-        self.v1 = self.power
+        self.__init__()  # Reset the sun generator to create a new sun profile
         for x in range(N):
             td = timeOfDay(0.05 * x)
             self.vector[x] = self.calculate(td)
@@ -311,11 +311,14 @@ class SunGenerator:
         else:
             return 0.0
 
+
 # ------------------------------------------------------------------------------------------- #
 # ---------------------------------- PowerPlant --------------------------------------------- #
 # ------------------------------------------------------------------------------------------- #
 class PowerPlant:
-    def __init__(self):
+    def __init__(self, requirements):
+        # Ref to requirements for scaling power output and emissions
+        self.requirements = requirements
         # Parameters related to the storage of burnable waste
         self.storage_amount_max = 64.0
         self.storage_amount = self.storage_amount_max
@@ -336,7 +339,7 @@ class PowerPlant:
         self.alpha_down = 0.004
         self.alpha_empty = 0.01
         # initialise filter using the current electricity requirement baseline
-        self.power_filter = OnePole(0.1, requirements.get_total_need_at(0))
+        self.power_filter = OnePole(0.1, self.requirements.get_total_need_at(0))
         self.v1 = 0.0
 
         # Turbine amount, i.e. the percentage of power that is converted to electricity
@@ -464,7 +467,7 @@ class PowerPlant:
         return power
 
     def reset(self):
-        self.__init__()
+        self.__init__(self.requirements)
        
 
 # EnergyGrid class to manage the overall energy production and consumption balance
@@ -473,7 +476,7 @@ class EnergyGrid:
         self.requirements = EnergyRequirements()
         self.wind_generator = WindGenerator()
         self.sun_generator = SunGenerator()
-        self.powerplant = PowerPlant()
+        self.powerplant = PowerPlant(self.requirements)
 
     def reset(self):
         self.wind_generator.make_new_vector()
@@ -515,9 +518,9 @@ def plot_electricity(fig):
     xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
     ax.set_xticklabels(xlabels)
     # fill the requirement envelope from the electricity requirement object
-    plt.fill_between(requirements.electricity.time_vector,
-                     requirements.electricity.need_min_vector,
-                     requirements.electricity.need_max_vector,
+    plt.fill_between(energy_grid.requirements.electricity.time_vector,
+                     energy_grid.requirements.electricity.need_min_vector,
+                     energy_grid.requirements.electricity.need_max_vector,
                      label="Behov")
     #lb, = ax.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
     #lheat, = ax.plot(x_values,heat_plot_values,'b-', label="Vind") # Create a line with the data
@@ -538,9 +541,9 @@ def plot_heat(fig):
     xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
     ax.set_xticklabels(xlabels)
     # use heat requirement for plot_heat
-    plt.fill_between(requirements.heat.time_vector,
-                     requirements.heat.need_min_vector,
-                     requirements.heat.need_max_vector,
+    plt.fill_between(energy_grid.requirements.heat.time_vector,
+                     energy_grid.requirements.heat.need_min_vector,
+                     energy_grid.requirements.heat.need_max_vector,
                      label="Behov")
     lheat, = ax.plot(x_values,heat_plot_values,'k-', label="Fjernvarme Produktion") # Create a line with the data
 
@@ -704,7 +707,6 @@ dispatcher.set_default_handler(print_handler)
 server = osc_server.ThreadingOSCUDPServer((args.ip, args.port), dispatcher)
 print("Serving on {}".format(server.server_address))
 
-
 # Start Osc in a Thread
 oscThread = Thread(target = server.serve_forever)
 oscThread.daemon = True  # Make it a daemon thread so it doesn't block shutdown
@@ -717,19 +719,6 @@ clear()
 ani1 = FuncAnimation(fig1, animate, interval=50, blit=False, cache_frame_data=False)
 ani2 = FuncAnimation(fig2, animateHeat, interval=50, blit=False, cache_frame_data=False)
 
-
-# Show the plot on screen
-#plt.ioff()
-#plt.tight_layout()
-#figman = plt.get_current_fig_manager()
-#figman.full_screen_toggle()
-#plt.show()
-
-
-
-
-
-
 plt.figure(fig1.number)
 fig1.canvas.manager.window.attributes('-fullscreen', False)
 fig1.canvas.draw()
@@ -738,8 +727,7 @@ plt.figure(fig2.number)
 fig2.canvas.manager.window.attributes('-fullscreen', False)
 fig2.canvas.draw()
 
-
-
+# Show the plots (this will block until the windows are closed)
 plt.show()    
 
 
