@@ -125,7 +125,7 @@ executor = ThreadPoolExecutor(max_workers=3)
 oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
 
 # Variables used for the live plot
-global x_values, y_values, index, run, t, td
+global x_values, el_plot_values, index, run, t, td
 
 # Data about the energy requirements
 
@@ -179,14 +179,12 @@ default_mw_needed = [
 # Number of time steps in the simulation (48 hours with 0.05 hour time steps)
 N = 961
 
-# instantiate requirement objects; heat profile can be changed independently
-electricity_req = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset=5.0)
-heat_req        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-4.0)
-
+# instantiate requirement object; electricity and heat profiles can be changed independently
 class EnergyRequirements:
-    def __init__(self, electricity_requirement, heat_requirement):
-        self.electricity = electricity_requirement
-        self.heat = heat_requirement
+    def __init__(self):
+        # Set default curves for both electricity and heat; they can be changed independently at runtime using the set_mw_needed method
+        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset= 5.0)
+        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-4.0)
 
     def get_total_need_vector(self):
         return self.electricity.need_vector + self.heat.need_vector
@@ -195,16 +193,11 @@ class EnergyRequirements:
         return self.electricity.need_vector[index] + self.heat.need_vector[index]
 
 # Create an instance of EnergyRequirements
-requirements = EnergyRequirements(electricity_req, heat_req)
-
+requirements = EnergyRequirements()
 
 # debugging prints
 print(requirements.electricity.hours_vector.shape)
 print(requirements.electricity.mw_needed.shape)
-
-
-
-
 
 def timeOfDay(t):
     while(t > 24.0):
@@ -213,9 +206,9 @@ def timeOfDay(t):
 
 
 x_values = []
-y_values = []
+el_plot_values = []
 b_values = []
-v_values = []
+heat_plot_values = []
 s_values = []
 index = 0 
 run = 0
@@ -275,8 +268,6 @@ class WindGenerator:
         else:
             return 0.0
 
-wind_generator = WindGenerator()
-
 # ------------------------------------------------------------------------------------------- #
 # ---------------------------------- Sun Generator ------------------------------------------ #
 # ------------------------------------------------------------------------------------------- #
@@ -319,9 +310,6 @@ class SunGenerator:
             return self.vector[index]
         else:
             return 0.0
-
-sol_generator = SunGenerator()
-
 
 # ------------------------------------------------------------------------------------------- #
 # ---------------------------------- PowerPlant --------------------------------------------- #
@@ -479,24 +467,45 @@ class PowerPlant:
         self.__init__()
        
 
-powerplant = PowerPlant()
+# EnergyGrid class to manage the overall energy production and consumption balance
+class EnergyGrid:
+    def __init__(self):
+        self.requirements = EnergyRequirements()
+        self.wind_generator = WindGenerator()
+        self.sun_generator = SunGenerator()
+        self.powerplant = PowerPlant()
+
+    def reset(self):
+        self.wind_generator.make_new_vector()
+        self.sun_generator.make_new_vector()
+        self.powerplant.reset()
+
+    def get_total_electricity(self, index):
+        return self.wind_generator.get(index) + self.sun_generator.get(index) + self.powerplant.get_electric_power()        
+
+    def get_total_heat(self, index):
+        return self.powerplant.get_heat_power()
+
+    def get_total_production(self, index):
+        return self.wind_generator.get(index) + self.sun_generator.get(index) + self.powerplant.get_total_power()
+
+    def calculate(self, index):
+        # Calculate the power plant output first as it depends on the current state of the oven and air flow
+        plant_power = self.powerplant.calculate()
+        # Then calculate the wind and sun power for the current time step
+        wind_power = self.wind_generator.get(index)
+        sun_power = self.sun_generator.get(index)
+        # Return the total production
+        return wind_power + sun_power + plant_power
 
 
 
+energy_grid = EnergyGrid()
 
-
-
-# Compute the Total Production
-production_filter = OnePole(0.5, requirements.electricity.need_vector[0])
-
-def production(index):
-    global production_filter
-    p = wind_generator.get(index) + sol_generator.get(index) + powerplant.calculate()
-    return production_filter.update(p)
 
 
 def plot_electricity(fig):
-    global lb,lv,ls,l
+    global lb,lheat,ls,lel
     ax = fig.gca()  # Get the current axes
     ax.set_xlim([0,48]) # Set the x-limits
     ax.set_ylim([0,70]) # Set the y-limits
@@ -511,15 +520,15 @@ def plot_electricity(fig):
                      requirements.electricity.need_max_vector,
                      label="Behov")
     #lb, = ax.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
-    #lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
-    l,  = plt.plot(x_values,y_values,'k-', label="Energi Til Net") # Create a line with the data
+    #lheat, = ax.plot(x_values,heat_plot_values,'b-', label="Vind") # Create a line with the data
+    lel,  = plt.plot(x_values,el_plot_values,'k-', label="El Produktion") # Create a line with the data
     #ls, = ax.plot(x_values,s_values,'k-', label="Energi til Net") # Create a line with the data
 
     plt.legend(loc='upper left')
     plt.grid(True)
 
 def plot_heat(fig):
-    global lv
+    global lheat
     ax = fig.gca()  # Get the current axes
     ax.set_xlim([0,48]) # Set the x-limits
     ax.set_ylim([0,70]) # Set the y-limits
@@ -533,7 +542,7 @@ def plot_heat(fig):
                      requirements.heat.need_min_vector,
                      requirements.heat.need_max_vector,
                      label="Behov")
-    lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
+    lheat, = ax.plot(x_values,heat_plot_values,'k-', label="Fjernvarme Produktion") # Create a line with the data
 
     plt.legend(loc='upper left')
     plt.grid(True)
@@ -548,21 +557,21 @@ plt.tight_layout()
 
 def sendElData():
     global storage_amount
-    oscSenderTeensy.send_message("/OvenAmount", powerplant.oven_amount/powerplant.oven_amount_max)
-    oscSenderTeensy.send_message("/WasteStorage", powerplant.get_storage_pct())
-    oscSenderTeensy.send_message("/OvenPower", powerplant.get_total_power_pct())
-    oscSenderTeensy.send_message("/WindPower", wind_generator.get(index)/wind_generator.max)
-    oscSenderTeensy.send_message("/SunPower", sol_generator.get(index)/sol_generator.max)
-    oscSenderTeensy.send_message("/Acid", powerplant.get_acid_emission())
-    oscSenderTeensy.send_message("/CO", powerplant.get_CO_emission())
-    oscSenderTeensy.send_message("/ElectricityPct", powerplant.get_electricity_pct())
-    oscSenderTeensy.send_message("/HeatPct", powerplant.get_heat_pct())
-    oscSenderTeensy.send_message("/PlantElectricPower", powerplant.get_electric_power_pct())
-    oscSenderTeensy.send_message("/OvenTemp", powerplant.get_oven_temperature_pct())
-    oscSenderTeensy.send_message("/CaCO3", powerplant.CaCO3_amount)
-    oscSenderTeensy.send_message("/NaOH", powerplant.NaOH_amount)
-    oscSenderTeensy.send_message("/TurbinePct", powerplant.turbine_pct)
-    oscSenderTeensy.send_message("/OvenAirFlow", powerplant.get_air_flow())
+    oscSenderTeensy.send_message("/OvenAmount", energy_grid.powerplant.oven_amount/energy_grid.powerplant.oven_amount_max)
+    oscSenderTeensy.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
+    oscSenderTeensy.send_message("/OvenPower", energy_grid.powerplant.get_total_power_pct())
+    oscSenderTeensy.send_message("/WindPower", energy_grid.wind_generator.get(index)/energy_grid.wind_generator.max)
+    oscSenderTeensy.send_message("/SunPower", energy_grid.sun_generator.get(index)/energy_grid.sun_generator.max)
+    oscSenderTeensy.send_message("/Acid", energy_grid.powerplant.get_acid_emission())
+    oscSenderTeensy.send_message("/CO", energy_grid.powerplant.get_CO_emission())
+    oscSenderTeensy.send_message("/ElectricityPct", energy_grid.powerplant.get_electricity_pct())
+    oscSenderTeensy.send_message("/HeatPct", energy_grid.powerplant.get_heat_pct())
+    oscSenderTeensy.send_message("/PlantElectricPower", energy_grid.powerplant.get_electric_power_pct())
+    oscSenderTeensy.send_message("/OvenTemp", energy_grid.powerplant.get_oven_temperature_pct())
+    oscSenderTeensy.send_message("/CaCO3", energy_grid.powerplant.CaCO3_amount)
+    oscSenderTeensy.send_message("/NaOH", energy_grid.powerplant.NaOH_amount)
+    oscSenderTeensy.send_message("/TurbinePct", energy_grid.powerplant.turbine_pct)
+    oscSenderTeensy.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
 
 # Non-blocking OSC sender using thread pool
 def sendElDataAsync():
@@ -570,31 +579,28 @@ def sendElDataAsync():
     executor.submit(sendElData)
 
 def updatePlot():
-    l.set_xdata(x_values)
-    l.set_ydata(y_values)
+    lel.set_xdata(x_values)
+    lel.set_ydata(el_plot_values)
     # Use async OSC sending to avoid blocking the render thread
     sendElDataAsync()
 
 def updateHeatPlot():
-    lv.set_xdata(x_values)
-    lv.set_ydata(v_values)
+    lheat.set_xdata(x_values)
+    lheat.set_ydata(heat_plot_values)
 
 def clear():
-    global x_values, y_values, b_values, v_values, s_values, index, run, t, td
+    global x_values, el_plot_values, b_values, heat_plot_values, s_values, index, run, t, td
     global production_filter
 
     x_values = []
-    y_values = []
+    el_plot_values = []
+    heat_plot_values = []
     b_values = []
-    v_values = []
     s_values = []
-    powerplant.reset()
-    wind_generator.make_new_vector()
-    sol_generator.make_new_vector()
+    energy_grid.reset()
     index = 0
     t = 0
     td = 0
-    production_filter.reset(requirements.electricity.need_vector[0])
 
     updatePlot()
 
@@ -610,12 +616,10 @@ def animate(i):
     if run > 0:
         t = index * 0.05
         td = timeOfDay(t)
-        y = production(index)
+        energy_grid.calculate(index)
         x_values.append(t)
-        y_values.append(y)
-        #b_values.append(powerplant.get_total_power())
-        v_values.append(wind_generator.get(index))
-        #s_values.append(sol_generator.get(index))
+        el_plot_values.append(energy_grid.get_total_electricity(index))
+        heat_plot_values.append(energy_grid.get_total_heat(index))
         
         # Batch rendering updates to reduce matplotlib overhead
         render_frame_counter += 1
@@ -645,11 +649,11 @@ def animateHeat(i):
 # --------------------------------------------------------------
 # Function to recieve value over osc 
 def oscValue(addr, value):
-    powerplant.set_air_flow(value)
-    print("[{0}] ~ {1}".format(addr, powerplant.air_flow))
+    energy_grid.powerplant.set_air_flow(value)
+    print("[{0}] ~ {1}".format(addr, energy_grid.powerplant.air_flow))
 
 def oscCmd(addr, value):
-    global x_values, y_values, index, run
+    global x_values, el_plot_values, index, run
     if value == 'clear':
         clear()
     elif value == 'run':
@@ -661,7 +665,7 @@ def oscCmd(addr, value):
         clear()
         run = 1
     elif value == 'FillButton':
-        powerplant.fill_oven()
+        energy_grid.powerplant.fill_oven()
     elif value == 'Reset':
         run = 0
         clear()
@@ -669,8 +673,8 @@ def oscCmd(addr, value):
     print("[{0}] ~ {1}".format(addr, value))
 
 def oscAmountInOven(addr, value):
-    powerplant.oven_amount = value
-    print("[{0}] ~ {1}".format(addr, powerplant.oven_amount))
+    energy_grid.powerplant.oven_amount = value
+    print("[{0}] ~ {1}".format(addr, energy_grid.powerplant.oven_amount))
 
 # Setup the OSC Functionality
 dispatcher = dispatcher.Dispatcher()
@@ -681,12 +685,12 @@ args = parser.parse_args()
 dispatcher.map("/OvenAirFlow", oscValue)
 dispatcher.map("/cmd", oscCmd)
 dispatcher.map("/AmountInOven", oscAmountInOven)
-dispatcher.map("/UseWind", lambda addr, value: wind_generator.activate(value))
-dispatcher.map("/UseSun", lambda addr, value: sol_generator.activate(value))
-dispatcher.map("/FillOven", lambda addr, value: powerplant.fill_oven())
-dispatcher.map("/CaCO3", lambda addr, value: powerplant.set_CaCO3_amount(value))
-dispatcher.map("/NaOH", lambda addr, value: powerplant.set_NaOH_amount(value))
-dispatcher.map("/TurbinePct", lambda addr, value: powerplant.set_turbine_pct(value))
+dispatcher.map("/UseWind", lambda addr, value: energy_grid.wind_generator.activate(value))
+dispatcher.map("/UseSun", lambda addr, value: energy_grid.sun_generator.activate(value))
+dispatcher.map("/FillOven", lambda addr, value: energy_grid.powerplant.fill_oven())
+dispatcher.map("/CaCO3", lambda addr, value: energy_grid.powerplant.set_CaCO3_amount(value))
+dispatcher.map("/NaOH", lambda addr, value: energy_grid.powerplant.set_NaOH_amount(value))
+dispatcher.map("/TurbinePct", lambda addr, value: energy_grid.powerplant.set_turbine_pct(value))
 
 # Print all incoming messages
 def print_handler(address, *args):
