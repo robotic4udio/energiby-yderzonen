@@ -38,9 +38,13 @@ except ImportError:
 
 # Reduce matplotlib memory usage and improve rendering
 plt.rcParams['figure.max_open_warning'] = 0
-plt.rcParams['lines.linewidth'] = 1.5
-plt.rcParams['lines.antialiased'] = False  # Disable antialiasing for speed
-plt.rcParams['patch.antialiased'] = False
+plt.rcParams['lines.linewidth'] = 2
+#plt.rcParams['lines.antialiased'] = False  # Disable antialiasing for speed
+#plt.rcParams['patch.antialiased'] = False
+#plt.style.use('fivethirtyeight')
+plt.rcParams['toolbar'] = 'None'
+plt.rcParams['figure.dpi'] = 96  # Standard DPI for RPi displays
+plt.rcParams['font.size'] = 9
 # ===================================================================
 
 
@@ -66,8 +70,8 @@ def get_monitor_info():
 def create_plot_on_monitor(monitor, plot_func):
     """Create a matplotlib figure positioned on the specified monitor."""
     x, y, width, height = monitor
-    #width = int(width * 0.5)  # Use 90% of the monitor width
-    #height = int(height * 0.5)  # Use 90% of the monitor height
+    width = int(width * 0.5)  # Use 90% of the monitor width
+    height = int(height * 0.5)  # Use 90% of the monitor height
     fig = plt.figure(figsize=(width/100, height/100), dpi=96)  # Lower DPI for performance
     # Disable toolbar and enable fast rendering
     # fig.canvas.set_window_title('')
@@ -80,17 +84,6 @@ def create_plot_on_monitor(monitor, plot_func):
     fig.patch.set_animated(True)
     return fig
 
-def plot_sine(fig):
-    x = np.linspace(0, 10, 100)
-    y = np.sin(x)
-    plt.plot(x, y)
-    plt.title('Sine Wave')
-
-def plot_cosine(fig):
-    x = np.linspace(0, 10, 100)
-    y = np.cos(x)
-    plt.plot(x, y)
-    plt.title('Cosine Wave')
 
 monitors = get_monitor_info()
 print("Detected monitors:", monitors)
@@ -98,8 +91,7 @@ if len(monitors) < 2:
     print("Need at least two monitors connected.")
     # exit(1)
 
-
-# Define a class for a 1st order lowpass filter
+# ==================== LOWPASS FILTER====================
 class OnePole:
     def __init__(self, alpha, initial_value):
         self.alpha = alpha
@@ -121,62 +113,87 @@ class OnePole:
         return self.value
 
 
-#plt.style.use('fivethirtyeight')
-plt.rcParams['toolbar'] = 'None'
-plt.rcParams['figure.dpi'] = 96  # Standard DPI for RPi displays
-plt.rcParams['font.size'] = 9
+
 
 # Data synchronization for multi-threaded rendering
 data_lock = Lock()
 rendering_queue = {'x': [], 'y': [], 'v': []}
 
+# Thread pool for parallel calculations
+executor = ThreadPoolExecutor(max_workers=3)
 
 oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
 
-# Thread pool for parallel calculations
-executor = ThreadPoolExecutor(max_workers=4)
-
 # Variables used for the live plot
-global x_values, y_values, bio_raw, index, run, t, td
+global x_values, y_values, index, run, t, td
 
-# Data about the electrical system
-hours_vector = np.linspace(0,48,49,True)
+# Data about the energy requirements
 
-# TIME       0     1     2     3     4     5     6     7     8     9     10    11    12    13    14    15    16    17    18    19    20    21    22    23    24 
-mw_needed = [24.0, 26.0, 27.0, 28.5, 32.5, 37.0, 39.0, 41.0, 40.0, 37.0, 32.0, 27.0, 21.0, 17.0, 16.0, 12.0, 18.0, 23.0, 29.0, 32.0, 26.0, 20.0, 16.0, 20.0,
-             22.0, 25.0, 27.0, 29.0, 33.0, 38.0, 40.0, 40.0, 39.0, 37.0, 32.0, 27.0, 21.0, 17.0, 16.0, 12.0, 18.0, 23.0, 29.0, 32.0, 26.0, 20.0, 18.0, 20.0, 24.0]
-mw_needed = np.array(mw_needed) + 5
+class EnergyRequirement:
+    """Encapsulate a demand profile and derived curves.
+
+    An instance holds an hourly baseline vector and produces the
+    interpolated/filtered curves that the rest of the application uses.
+
+    Two separate objects are created below: one for electricity and one
+    for heat.  The setter method allows the profile to be changed at
+    runtime.
+    """
+
+    def __init__(self, mw_needed, N=961, need_uncertainty=7.0):
+        self.hours_vector = np.linspace(0, 48, 49, True)
+        self.N = N
+        self.need_uncertainty = need_uncertainty
+        self.set_mw_needed(mw_needed)
+
+    def set_mw_needed(self, mw_needed):
+        """Assign a new hourly demand pattern and recompute all curves."""
+        self.mw_needed = np.array(mw_needed)
+
+        self.time_vector = np.zeros(self.N)
+        self.need_vector = np.full(self.N, self.mw_needed.mean())
+        self.need_min_vector = np.zeros(self.N)
+        self.need_max_vector = np.zeros(self.N)
+
+        last_need = self.mw_needed[0]
+        spline = interp1d(self.hours_vector, self.mw_needed, kind='cubic')
+        for x in range(self.N):
+            t = 0.05 * x
+            alpha = 0.02
+            last_need = spline(t) * alpha + last_need * (1.0 - alpha)
+            self.need_vector[x] = last_need
+            self.need_min_vector[x] = last_need - self.need_uncertainty
+            self.need_max_vector[x] = last_need + self.need_uncertainty
+            self.time_vector[x] = t
+
+# default hourly demand curve used for both electricity and heat
+default_mw_needed = [
+    24.0, 26.0, 27.0, 28.5, 32.5, 37.0, 39.0, 41.0, 40.0, 37.0, 32.0, 27.0,
+    21.0, 17.0, 16.0, 12.0, 18.0, 23.0, 29.0, 32.0, 26.0, 20.0, 16.0, 20.0,
+    22.0, 25.0, 27.0, 29.0, 33.0, 38.0, 40.0, 40.0, 39.0, 37.0, 32.0, 27.0,
+    21.0, 17.0, 16.0, 12.0, 18.0, 23.0, 29.0, 32.0, 26.0, 20.0, 18.0, 20.0,
+    24.0,
+]
 
 # Number of time steps in the simulation (48 hours with 0.05 hour time steps)
 N = 961
 
-print(mw_needed)
+# instantiate requirement objects; heat profile can be changed independently
+electricity_req = EnergyRequirement(default_mw_needed, N=N)
+heat_req        = EnergyRequirement(default_mw_needed, N=N)
 
-time_vector = np.zeros(N)
-need_vector = np.full(N, mw_needed.mean())
-need_min_vector = np.zeros(N)
-need_max_vector = np.zeros(N)
-need_uncertainty = 7.0
+# convenience aliases for code that still uses the old globals
+need_vector     = electricity_req.need_vector
+need_min_vector = electricity_req.need_min_vector
+need_max_vector = electricity_req.need_max_vector
+time_vector     = electricity_req.time_vector
 
-lastNeed = mw_needed[0]
-
-mw_need_spline = interp1d(hours_vector, mw_needed, kind='cubic')
-
-for x in range(N):
-    t = 0.05 * x
-    alpha = 0.02
-    lastNeed = mw_need_spline(t)*alpha + lastNeed*(1.0-alpha)
-    need_vector[x] = lastNeed
-    need_min_vector[x] = lastNeed - need_uncertainty
-    need_max_vector[x] = lastNeed + need_uncertainty
-    time_vector[x] = t
-
+# debugging prints
+print(electricity_req.hours_vector.shape)
+print(electricity_req.mw_needed.shape)
 
 steps = 0
 firstStep = True
-
-print(hours_vector.shape)
-print(mw_needed.shape)
 
 
 def timeOfDay(t):
@@ -251,12 +268,13 @@ class WindGenerator:
 wind_generator = WindGenerator()
 
 # ------------------------------------------------------------------------------------------- #
-# ---------------------------------- Sul Generator ------------------------------------------ #
+# ---------------------------------- Sun Generator ------------------------------------------ #
 # ------------------------------------------------------------------------------------------- #
 class SunGenerator:
     def __init__(self):
         self.alpha = 0.1  # Alpha value for 1st order lowpass filter
-        self.max = 0.07 * mw_needed.mean()
+        # use the current average electricity demand for scaling
+        self.max = 0.07 * electricity_req.mw_needed.mean()
         self.v1 = 0.0
         self.power = 0.0
         self.vector = np.zeros(N)
@@ -319,7 +337,8 @@ class PowerPlant:
         self.alpha_up = 0.008
         self.alpha_down = 0.004
         self.alpha_empty = 0.01
-        self.power_filter = OnePole(0.1, need_vector[0])
+        # initialise filter using the current electricity requirement baseline
+        self.power_filter = OnePole(0.1, electricity_req.need_vector[0])
         self.v1 = 0.0
 
         # Turbine amount, i.e. the percentage of power that is converted to electricity
@@ -453,8 +472,12 @@ class PowerPlant:
 powerplant = PowerPlant()
 
 
+
+
+
+
 # Compute the Total Production
-production_filter = OnePole(0.5, need_vector[0])
+production_filter = OnePole(0.5, electricity_req.need_vector[0])
 
 def production(index):
     global production_filter
@@ -472,7 +495,11 @@ def plot_electricity(fig):
     ax.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
     xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
     ax.set_xticklabels(xlabels)
-    plt.fill_between(time_vector, need_min_vector, need_max_vector, label="Behov")
+    # fill the requirement envelope from the electricity requirement object
+    plt.fill_between(electricity_req.time_vector,
+                     electricity_req.need_min_vector,
+                     electricity_req.need_max_vector,
+                     label="Behov")
     #lb, = ax.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
     #lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
     l,  = plt.plot(x_values,y_values,'k-', label="Energi Til Net") # Create a line with the data
@@ -491,7 +518,11 @@ def plot_heat(fig):
     ax.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
     xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
     ax.set_xticklabels(xlabels)
-    plt.fill_between(time_vector, need_min_vector, need_max_vector, label="Behov")
+    # use heat requirement for plot_heat
+    plt.fill_between(heat_req.time_vector,
+                     heat_req.need_min_vector,
+                     heat_req.need_max_vector,
+                     label="Behov")
     lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
 
     plt.legend(loc='upper left')
@@ -553,7 +584,7 @@ def clear():
     index = 0
     t = 0
     td = 0
-    production_filter.reset(need_vector[0])
+    production_filter.reset(electricity_req.need_vector[0])
     steps = 0
 
     updatePlot()
