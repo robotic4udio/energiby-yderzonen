@@ -140,16 +140,18 @@ class EnergyRequirement:
     runtime.
     """
 
-    def __init__(self, mw_needed, N=961, need_uncertainty=7.0):
+    def __init__(self, mw_needed, N=961, offset=0.0, uncertainty=7.0, alpha=0.02):
         self.hours_vector = np.linspace(0, 48, 49, True)
         self.N = N
-        self.need_uncertainty = need_uncertainty
-        self.set_mw_needed(mw_needed)
+        self.set_mw_needed(mw_needed, offset, uncertainty, alpha)
 
-    def set_mw_needed(self, mw_needed):
+    def set_mw_needed(self, mw_needed, offset=0.0, uncertainty=7.0, alpha=0.02):
         """Assign a new hourly demand pattern and recompute all curves."""
-        self.mw_needed = np.array(mw_needed)
+        self.offset = offset
+        self.uncertainty = uncertainty
+        self.alpha = alpha
 
+        self.mw_needed = np.array(mw_needed) + offset
         self.time_vector = np.zeros(self.N)
         self.need_vector = np.full(self.N, self.mw_needed.mean())
         self.need_min_vector = np.zeros(self.N)
@@ -159,11 +161,10 @@ class EnergyRequirement:
         spline = interp1d(self.hours_vector, self.mw_needed, kind='cubic')
         for x in range(self.N):
             t = 0.05 * x
-            alpha = 0.02
-            last_need = spline(t) * alpha + last_need * (1.0 - alpha)
+            last_need = spline(t) * self.alpha + last_need * (1.0 - self.alpha)
             self.need_vector[x] = last_need
-            self.need_min_vector[x] = last_need - self.need_uncertainty
-            self.need_max_vector[x] = last_need + self.need_uncertainty
+            self.need_min_vector[x] = last_need - self.uncertainty
+            self.need_max_vector[x] = last_need + self.uncertainty
             self.time_vector[x] = t
 
 # default hourly demand curve used for both electricity and heat
@@ -179,21 +180,30 @@ default_mw_needed = [
 N = 961
 
 # instantiate requirement objects; heat profile can be changed independently
-electricity_req = EnergyRequirement(default_mw_needed, N=N)
-heat_req        = EnergyRequirement(default_mw_needed, N=N)
+electricity_req = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset=5.0)
+heat_req        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-4.0)
 
-# convenience aliases for code that still uses the old globals
-need_vector     = electricity_req.need_vector
-need_min_vector = electricity_req.need_min_vector
-need_max_vector = electricity_req.need_max_vector
-time_vector     = electricity_req.time_vector
+class EnergyRequirements:
+    def __init__(self, electricity_requirement, heat_requirement):
+        self.electricity = electricity_requirement
+        self.heat = heat_requirement
+
+    def get_total_need_vector(self):
+        return self.electricity.need_vector + self.heat.need_vector
+
+    def get_total_need_at(self, index):
+        return self.electricity.need_vector[index] + self.heat.need_vector[index]
+
+# Create an instance of EnergyRequirements
+requirements = EnergyRequirements(electricity_req, heat_req)
+
 
 # debugging prints
-print(electricity_req.hours_vector.shape)
-print(electricity_req.mw_needed.shape)
+print(requirements.electricity.hours_vector.shape)
+print(requirements.electricity.mw_needed.shape)
 
-steps = 0
-firstStep = True
+
+
 
 
 def timeOfDay(t):
@@ -274,7 +284,7 @@ class SunGenerator:
     def __init__(self):
         self.alpha = 0.1  # Alpha value for 1st order lowpass filter
         # use the current average electricity demand for scaling
-        self.max = 0.07 * electricity_req.mw_needed.mean()
+        self.max = 0.07 * requirements.electricity.mw_needed.mean()
         self.v1 = 0.0
         self.power = 0.0
         self.vector = np.zeros(N)
@@ -338,7 +348,7 @@ class PowerPlant:
         self.alpha_down = 0.004
         self.alpha_empty = 0.01
         # initialise filter using the current electricity requirement baseline
-        self.power_filter = OnePole(0.1, electricity_req.need_vector[0])
+        self.power_filter = OnePole(0.1, requirements.get_total_need_at(0))
         self.v1 = 0.0
 
         # Turbine amount, i.e. the percentage of power that is converted to electricity
@@ -477,7 +487,7 @@ powerplant = PowerPlant()
 
 
 # Compute the Total Production
-production_filter = OnePole(0.5, electricity_req.need_vector[0])
+production_filter = OnePole(0.5, requirements.electricity.need_vector[0])
 
 def production(index):
     global production_filter
@@ -496,9 +506,9 @@ def plot_electricity(fig):
     xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
     ax.set_xticklabels(xlabels)
     # fill the requirement envelope from the electricity requirement object
-    plt.fill_between(electricity_req.time_vector,
-                     electricity_req.need_min_vector,
-                     electricity_req.need_max_vector,
+    plt.fill_between(requirements.electricity.time_vector,
+                     requirements.electricity.need_min_vector,
+                     requirements.electricity.need_max_vector,
                      label="Behov")
     #lb, = ax.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
     #lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
@@ -519,9 +529,9 @@ def plot_heat(fig):
     xlabels = ['0:00','6:00','12:00','18:00','0:00','6:00','12:00','18:00','0:00']
     ax.set_xticklabels(xlabels)
     # use heat requirement for plot_heat
-    plt.fill_between(heat_req.time_vector,
-                     heat_req.need_min_vector,
-                     heat_req.need_max_vector,
+    plt.fill_between(requirements.heat.time_vector,
+                     requirements.heat.need_min_vector,
+                     requirements.heat.need_max_vector,
                      label="Behov")
     lv, = ax.plot(x_values,v_values,'b-', label="Vind") # Create a line with the data
 
@@ -571,7 +581,7 @@ def updateHeatPlot():
 
 def clear():
     global x_values, y_values, b_values, v_values, s_values, index, run, t, td
-    global production_filter, steps
+    global production_filter
 
     x_values = []
     y_values = []
@@ -584,8 +594,7 @@ def clear():
     index = 0
     t = 0
     td = 0
-    production_filter.reset(electricity_req.need_vector[0])
-    steps = 0
+    production_filter.reset(requirements.electricity.need_vector[0])
 
     updatePlot()
 
@@ -597,7 +606,7 @@ BATCH_SIZE = 2  # Update every 2 frames to reduce rendering overhead
 
 # Animate Function for the plotting - OPTIMIZED
 def animate(i):
-    global index, run, t, td, steps, render_frame_counter
+    global index, run, t, td, render_frame_counter
     if run > 0:
         t = index * 0.05
         td = timeOfDay(t)
@@ -625,7 +634,7 @@ def animate(i):
     time.sleep(0.01)
 
 def animateHeat(i):
-    global index, run, t, td, steps
+    global index, run, t, td
     if run > 0:
         # Only update heat plot occasionally to reduce render load
         updateHeatPlot()
