@@ -3,6 +3,13 @@ Energiby YderZonen is an interactive installation with a digital interface that 
 
 Designed as a game, the project challenges students to balance energy supply, community needs, and sustainability. The goal is to promote critical thinking about energy management and sustainable practices through hands-on experience.
 
+## The wall installation
+![Energiby YderZonen Wall](yz_energy_wall.jpg)
+
+## The control panel
+![Energiby YderZonen control panel](yz_energy_controlpanel.jpg)
+
+
 # What is needed?
 1. Raspberry Pi 5
 2. Teensy 4.1
