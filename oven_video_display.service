@@ -6,7 +6,8 @@ Wants=sound.target
 [Service]
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/energiby/.Xauthority
-ExecStart=bash /home/energiby/repositories/energiby-yderzonen/oven_video_display.py
+WorkingDirectory=/home/energiby/repositories/energiby-yderzonen
+ExecStart=bash run_oven_video_display.sh
 Restart=always
 RestartSec=10s
 KillMode=process

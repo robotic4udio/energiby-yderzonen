@@ -13,6 +13,8 @@ import tkinter as tk
 import multiprocessing
 import time
 import argparse
+import subprocess
+import shutil
 from pythonosc import dispatcher
 from pythonosc import osc_server
 from threading import Thread
@@ -191,7 +193,7 @@ def main():
     print()
     
     # OSC control setup
-    osc_intensity = {'value': 0.5, 'manual_mode': True}
+    osc_intensity = {'value': 0.5, 'manual_mode': False}
     
     def osc_intensity_handler(addr, value):
         """Handle incoming OSC intensity messages."""
@@ -221,10 +223,21 @@ def main():
     test_speed = 0.01
     prev_time = time.time()
     last_fps = 30.0
+    cursor_hider_process = None
     
     # Create fullscreen window
     cv2.namedWindow("Oven Video Mixer", cv2.WINDOW_NORMAL)
     cv2.setWindowProperty("Oven Video Mixer", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    # Hide cursor while fullscreen playback is active (Linux/X11).
+    if shutil.which("unclutter"):
+        cursor_hider_process = subprocess.Popen(
+            ["unclutter", "-idle", "0", "-root"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        print("Warning: 'unclutter' not found, mouse cursor will remain visible")
     
     while True:
         loop_start = time.time()
@@ -320,6 +333,12 @@ def main():
         frame_num %= max(len(mixer.frames[0]), len(mixer.frames[1]), len(mixer.frames[2]), len(mixer.frames[3]))
     
     cv2.destroyAllWindows()
+    if cursor_hider_process:
+        cursor_hider_process.terminate()
+        try:
+            cursor_hider_process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            cursor_hider_process.kill()
     print("Done!")
 
 

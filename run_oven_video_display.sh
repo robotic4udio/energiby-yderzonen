@@ -4,6 +4,9 @@
 
 set -e
 
+# Resolve paths relative to this script so systemd cwd does not matter.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "Starting Energiby YderZonen with optimizations..."
 echo ""
 
@@ -27,7 +30,7 @@ killall firefox chromium-browser thunderbird 2>/dev/null || true
 export PYTHONOPTIMIZE=2
 
 echo "Starting application..."
-python3 ./oven_video_display.py "$@"
+python3 "$SCRIPT_DIR/oven_video_display.py" "$@"
 
 # 6. Reset CPU governor to powersave when done
 echo "Resetting CPU governor to powersave..."
