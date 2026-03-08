@@ -57,6 +57,7 @@ class OvenVideoMixer:
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.video_names = ["low", "medium", "high", "overdrive"]
+        self.black_frame = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
         
         # Load all videos into RAM in parallel
         print("Loading videos into RAM...")
@@ -103,9 +104,11 @@ class OvenVideoMixer:
         Get a frame based on oven intensity (0-1).
         
         Intensity mapping:
-        - 0.00-0.33: blend between low and medium
-        - 0.33-0.66: blend between medium and high
-        - 0.66-1.00: blend between high and overdrive
+        - 0.00: black screen
+        - 0.00-0.25: blend between black and low
+        - 0.25-0.50: blend between low and medium
+        - 0.50-0.75: blend between medium and high
+        - 0.75-1.00: blend between high and overdrive
         
         Args:
             frame_num: Current frame number
@@ -116,21 +119,30 @@ class OvenVideoMixer:
         """
         intensity = np.clip(intensity, 0.0, 1.0)
         
-        if intensity < 0.33:
+        if intensity <= 0.0:
+            return self.black_frame.copy()
+
+        if intensity < 0.25:
+            # Blend between black and low (0)
+            blend_alpha = intensity / 0.25
+            frame1 = self.black_frame
+            frame2 = self._get_frame(0, frame_num)
+
+        elif intensity < 0.5:
             # Blend between low (0) and medium (1)
-            blend_alpha = intensity / 0.33
+            blend_alpha = (intensity - 0.25) / 0.25
             frame1 = self._get_frame(0, frame_num)
             frame2 = self._get_frame(1, frame_num)
-        
-        elif intensity < 0.66:
+
+        elif intensity < 0.75:
             # Blend between medium (1) and high (2)
-            blend_alpha = (intensity - 0.33) / 0.33
+            blend_alpha = (intensity - 0.5) / 0.25
             frame1 = self._get_frame(1, frame_num)
             frame2 = self._get_frame(2, frame_num)
-        
+
         else:
             # Blend between high (2) and overdrive (3)
-            blend_alpha = (intensity - 0.66) / 0.34
+            blend_alpha = (intensity - 0.75) / 0.25
             frame1 = self._get_frame(2, frame_num)
             frame2 = self._get_frame(3, frame_num)
         
@@ -168,7 +180,7 @@ def main():
     
     print("Starting video playback...")
     print("Controls:")
-    print("  Q/S: Increase/Decrease intensity")
+    print("  W/S: Increase/Decrease intensity")
     print("  'T': Test mode (auto-cycle through intensities)")
     print("  'Q' or ESC: Quit")
     print()
