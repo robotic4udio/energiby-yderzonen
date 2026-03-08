@@ -62,7 +62,7 @@ class OvenVideoMixer:
         # Load all videos into RAM in parallel
         print("Loading videos into RAM...")
         
-        with multiprocessing.Pool(processes=4) as pool:
+        with multiprocessing.Pool(processes=3) as pool:
             results = pool.starmap(load_video_frames, [(path, self.frame_width, self.frame_height) for path in video_paths])
         
         self.frames = results
@@ -153,10 +153,10 @@ def main():
     """Real-time oven video mixer with intensity control."""
     
     video_paths = [
-        "/home/radius/repositories/energiby-yderzonen/oven_low.mp4",
-        "/home/radius/repositories/energiby-yderzonen/oven_medium.mp4",
-        "/home/radius/repositories/energiby-yderzonen/oven_high.mp4",
-        "/home/radius/repositories/energiby-yderzonen/oven_overdrive.mp4",
+        "/home/energiby/repositories/energiby-yderzonen/oven_low.mp4",
+        "/home/energiby/repositories/energiby-yderzonen/oven_medium.mp4",
+        "/home/energiby/repositories/energiby-yderzonen/oven_high.mp4",
+        "/home/energiby/repositories/energiby-yderzonen/oven_overdrive.mp4",
     ]
     
     # Check if videos exist
