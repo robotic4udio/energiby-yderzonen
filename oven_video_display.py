@@ -12,6 +12,10 @@ from typing import List, Optional
 import tkinter as tk
 import multiprocessing
 import time
+import argparse
+from pythonosc import dispatcher
+from pythonosc import osc_server
+from threading import Thread
 
 
 def load_video_frames(path: str, frame_width: int, frame_height: int) -> Optional[List[np.ndarray]]:
@@ -182,8 +186,34 @@ def main():
     print("Controls:")
     print("  W/S: Increase/Decrease intensity")
     print("  'T': Test mode (auto-cycle through intensities)")
+    print("  'M': Toggle manual/OSC control")
     print("  'Q' or ESC: Quit")
     print()
+    
+    # OSC control setup
+    osc_intensity = {'value': 0.5, 'manual_mode': True}
+    
+    def osc_intensity_handler(addr, value):
+        """Handle incoming OSC intensity messages."""
+        if not osc_intensity['manual_mode']:
+            osc_intensity['value'] = max(0.0, min(1.0, value))
+    
+    # Setup OSC server
+    osc_dispatcher = dispatcher.Dispatcher()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ip", default="0.0.0.0", help="The ip to listen on")
+    parser.add_argument("--port", type=int, default=7134, help="The port to listen on")
+    args = parser.parse_args()
+    
+    osc_dispatcher.map("/OvenIntensity", osc_intensity_handler)
+    
+    server = osc_server.ThreadingOSCUDPServer((args.ip, args.port), osc_dispatcher)
+    print(f"OSC Server listening on {server.server_address}")
+    
+    # Start OSC in a thread
+    osc_thread = Thread(target=server.serve_forever)
+    osc_thread.daemon = True
+    osc_thread.start()
     
     frame_num = 0
     intensity = 0.5
@@ -198,6 +228,11 @@ def main():
     
     while True:
         loop_start = time.time()
+        
+        # Use OSC intensity if not in manual mode
+        if not osc_intensity['manual_mode'] and not test_mode:
+            intensity = osc_intensity['value']
+        
         # Get current frame
         frame = mixer.get_frame(frame_num, intensity)
         
@@ -225,7 +260,8 @@ def main():
         frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
         
         # Add text
-        text = f"Intensity: {intensity:.2f} FPS: {last_fps:.1f}"
+        mode_text = "MANUAL" if osc_intensity['manual_mode'] else "OSC"
+        text = f"Intensity: {intensity:.2f} FPS: {last_fps:.1f} [{mode_text}]"
         if test_mode:
             text += " [TEST MODE]"
         cv2.putText(
@@ -260,10 +296,19 @@ def main():
             break
         elif key == ord('w'):  # W
             intensity = min(1.0, intensity + 0.05)
+            osc_intensity['manual_mode'] = True
         elif key == ord('s'):  # S
             intensity = max(0.0, intensity - 0.05)
+            osc_intensity['manual_mode'] = True
         elif key == ord('t'):  # Test mode
             test_mode = not test_mode
+            osc_intensity['manual_mode'] = True
+        elif key == ord('m'):  # Toggle manual/OSC mode
+            osc_intensity['manual_mode'] = not osc_intensity['manual_mode']
+            if not osc_intensity['manual_mode']:
+                print("Switched to OSC control mode")
+            else:
+                print("Switched to manual control mode")
         
         # Auto-cycle in test mode
         if test_mode:
