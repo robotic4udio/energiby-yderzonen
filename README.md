@@ -21,9 +21,11 @@ Download Raspberry Pi Imager https://www.raspberrypi.com/software/
 
 Install Needed Packages!
 ```console
+sudo apt update
+sudo apt upgrade -y
 sudo apt install -y code
-sudo apt install -y python3 python3-pip python3-numpy python3-matplotlib
-sudo pip3 install python-osc
+sudo apt install -y python3 python3-pip python3-numpy python3-matplotlib python3-opencv
+pip3 install python-oscv --break-system-packages
 ```
 
 # Install Arduino
