@@ -21,6 +21,17 @@ or "doublebuffer" for animation basics.
 #include <Bounce.h>
 #include <elapsedMillis.h>
 
+// ------------------------------------------------------------------------------------- //
+// -------------------------------------- The Storage of Waste ------------------------- //
+float storage = 1.0;
+void set_storage(OSCMessage &msg)
+{
+  if     (msg.isFloat(0) ) storage = msg.getFloat(0);
+  else if(msg.isDouble(0)) storage = msg.getDouble(0);
+  Serial.print("/WasteStorage: ");
+  Serial.println(storage);
+}
+
 // ---------------------------------------------------------------------------- //
 // ------------------ Wifi ---------------------------------------------------- //
 // ---------------------------------------------------------------------------- //
@@ -29,9 +40,8 @@ char pass[] = "oioioioi";            // your network password
 
 // ------------------ Open Sound Control -------------------------------------- //
 WiFiUDP Udp;                                 // A UDP instance to let us send and receive packets over UDP
-const unsigned int localPort = 7135;         // local port to listen for OSC packets (actually not used for sending)
-IPAddress OutIp(192,168,0,50);               // remote IP of Raspberry Pi running the main code
-unsigned int OutPort   = 8135;               // remote port to receive OSC
+const unsigned int localPort = 7134;         // local port to listen for OSC packets (actually not used for sending)
+IPAddress OutIp(192,168,1,100);              // remote IP of Raspberry Pi running the main code
 
 OSCErrorCode error;
 
@@ -140,7 +150,33 @@ void setup(void) {
 
 // MAIN LOOP - RUNS ONCE PER FRAME OF ANIMATION ----------------------------
 
+// Loop OSC to check for incoming messages and dispatch
+bool loopOSC(){
+  bool newOSC = false;
+  OSCMessage msg;
+  int size = Udp.parsePacket();
+
+  if(size > 0){
+    while (size--){
+      msg.fill(Udp.read());
+    }
+    if(!msg.hasError()){
+      msg.dispatch("/WasteStorage", set_storage);
+      newOSC = true;
+    } 
+    else {
+      error = msg.getError();
+      Serial.print("error: ");
+      Serial.println(error);
+    }
+  }
+  return newOSC;
+}
+
 void loop() {
+  // Check for incoming OSC messages and dispatch
+  loopOSC();
+
   // Limit the animation frame rate to MAX_FPS.  Because the subsequent sand
   // calculations are non-deterministic (don't always take the same amount
   // of time, depending on their current states), this helps ensure that
@@ -154,9 +190,13 @@ void loop() {
   dimension_t x, y;
   matrix.fillScreen(0x0);
   for(int i=0; i<HEIGHT; i++) {
-    uint16_t color = colors[0];
-    matrix.drawPixel(x, i, color);
-    //Serial.printf("(%d, %d)\n", x, y);
+    for(x=0; x<WIDTH*storage; x++) {
+      uint16_t color = colors[0];
+      matrix.drawPixel(x, i, color);
+      //Serial.printf("(%d, %d)\n", x, y);
+    }
   }
+
   matrix.show(); // Copy data to matrix buffers
 }
+
