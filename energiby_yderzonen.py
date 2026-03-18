@@ -127,6 +127,7 @@ executor = ThreadPoolExecutor(max_workers=3)
 
 oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
 oscSenderOvenDisplay = udp_client.SimpleUDPClient("192.168.1.101",7134)
+oscSenderStorageDisplay = udp_client.SimpleUDPClient("192.168.1.104",7134)
 
 # Variables used for the live plot
 global x_values, el_plot_values, index, run, t, td
@@ -577,6 +578,7 @@ def sendElData():
     oscSenderTeensy.send_message("/TurbinePct", energy_grid.powerplant.turbine_pct)
     oscSenderTeensy.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
     oscSenderOvenDisplay.send_message("/OvenIntensity", energy_grid.powerplant.get_oven_temperature_pct())
+    oscSenderStorageDisplay.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
 
 # Non-blocking OSC sender using thread pool
 def sendElDataAsync():
