@@ -22,6 +22,7 @@ import urllib.request
 
 import json
 from scipy.interpolate import interp1d
+from dataclasses import dataclass
 
 # ==================== RASPBERRY PI OPTIMIZATION ====================
 # Optimize matplotlib rendering and system performance
@@ -126,8 +127,8 @@ rendering_queue = {'x': [], 'y': [], 'v': []}
 executor = ThreadPoolExecutor(max_workers=3)
 
 oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
-oscSenderOvenDisplay = udp_client.SimpleUDPClient("192.168.1.101",7134)
-oscSenderStorageDisplay = udp_client.SimpleUDPClient("192.168.1.104",7134)
+oscSenderOvenDisplay = udp_client.SimpleUDPClient("192.168.0.101",7134)
+oscSenderStorageDisplay = udp_client.SimpleUDPClient("192.168.0.104",7134)
 
 # Variables used for the live plot
 global x_values, el_plot_values, index, run, t, td
@@ -188,8 +189,8 @@ N = 961
 class EnergyRequirements:
     def __init__(self):
         # Set default curves for both electricity and heat; they can be changed independently at runtime using the set_mw_needed method
-        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset= 5.0)
-        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-4.0)
+        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset= 3.0)
+        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-8.0)
 
     def get_total_need_vector(self):
         return self.electricity.need_vector + self.heat.need_vector
@@ -262,9 +263,12 @@ class WindGenerator:
         for x in range(N):
             self.vector[x] = self.calculate()
 
+    def get_available_power(self, index):
+        return self.vector[index]
+
     def get(self, index):
         if self.active:
-            return self.vector[index]
+            return self.get_available_power(index)
         else:
             return 0.0
 
@@ -307,45 +311,205 @@ class SunGenerator:
             td = timeOfDay(0.05 * x)
             self.vector[x] = self.calculate(td)
 
+    def get_available_power(self, index):
+        return self.vector[index]
+
     def get(self, index):
         if self.active:
-            return self.vector[index]
+            return self.get_available_power(index)
         else:
             return 0.0
+
+
 
 
 # ------------------------------------------------------------------------------------------- #
 # ---------------------------------- PowerPlant --------------------------------------------- #
 # ------------------------------------------------------------------------------------------- #
+@dataclass
+class BurnableWaste:
+    amount: float = 0.0
+    energy_density: float = 1.0
+    acid_amount: float = 0.2
+    co_amount: float = 0.2
+    moisture_content: float = 0.15
+    ash_content: float = 0.08
+
+    def copy_with_amount(self, amount):
+        return BurnableWaste(
+            amount=max(amount, 0.0),
+            energy_density=self.energy_density,
+            acid_amount=self.acid_amount,
+            co_amount=self.co_amount,
+            moisture_content=self.moisture_content,
+            ash_content=self.ash_content,
+        )
+
+    def effective_energy_factor(self):
+        # Moisture and ash reduce the effective energy released from the fuel.
+        return max(0.2, self.energy_density * (1.0 - 0.6 * self.moisture_content) * (1.0 - 0.5 * self.ash_content))
+
+
+class BurnableWasteStorage:
+    # Preset profiles for common waste streams delivered to the plant.
+    # Keys are both the integer index and the lowercase name (resolved in _waste_from_type).
+    WASTE_TYPES = {
+        0: dict(name="household",  energy_density=0.85, acid_amount=0.25, co_amount=0.28, moisture_content=0.22, ash_content=0.12),
+        1: dict(name="paper",      energy_density=0.90, acid_amount=0.10, co_amount=0.15, moisture_content=0.08, ash_content=0.06),
+        2: dict(name="plastic",    energy_density=1.40, acid_amount=0.45, co_amount=0.50, moisture_content=0.02, ash_content=0.04),
+        3: dict(name="organic",    energy_density=0.40, acid_amount=0.12, co_amount=0.18, moisture_content=0.60, ash_content=0.18),
+        4: dict(name="wood",       energy_density=1.05, acid_amount=0.08, co_amount=0.20, moisture_content=0.25, ash_content=0.05),
+        5: dict(name="industrial", energy_density=1.20, acid_amount=0.55, co_amount=0.45, moisture_content=0.05, ash_content=0.15),
+    }
+    _WASTE_TYPE_BY_NAME = {v["name"]: k for k, v in WASTE_TYPES.items()}
+
+    def __init__(self, capacity):
+        self.capacity = max(capacity, 0.0)
+        self.waste_batches = []
+        self.clear()  # Fill with random waste batches on initialization
+
+    @staticmethod
+    def _waste_from_type(waste_type, amount):
+        """Return a BurnableWaste with preset properties for the given type name or index."""
+        if isinstance(waste_type, str):
+            if waste_type.lower() == "random":
+                idx = np.random.randint(0, len(BurnableWasteStorage.WASTE_TYPES))
+            else:
+                idx = BurnableWasteStorage._WASTE_TYPE_BY_NAME.get(waste_type.lower())
+                if idx is None:
+                    valid = list(BurnableWasteStorage._WASTE_TYPE_BY_NAME)
+                    raise ValueError(f"Unknown waste type '{waste_type}'. Valid names: {valid}")
+        else:
+            idx = int(waste_type)
+            if idx == -1:
+                idx = np.random.randint(0, len(BurnableWasteStorage.WASTE_TYPES))
+        props = BurnableWasteStorage.WASTE_TYPES.get(idx)
+        if props is None:
+            valid = list(BurnableWasteStorage.WASTE_TYPES)
+            raise ValueError(f"Unknown waste type index {waste_type}. Valid indices: {valid}")
+        return BurnableWaste(
+            amount=max(amount, 0.0),
+            energy_density=props["energy_density"],
+            acid_amount=props["acid_amount"],
+            co_amount=props["co_amount"],
+            moisture_content=props["moisture_content"],
+            ash_content=props["ash_content"],
+        )
+
+    def total_amount(self):
+        return sum(batch.amount for batch in self.waste_batches)
+
+    def available_capacity(self):
+        return max(self.capacity - self.total_amount(), 0.0)
+
+    def fill_ratio(self):
+        if self.capacity <= 0:
+            return 0.0
+        return self.total_amount() / self.capacity
+
+    def add_waste(self, waste, amount=10.0):
+        """Add waste to storage.
+
+        waste can be:
+          - a BurnableWaste object  (existing behaviour; amount parameter ignored)
+          - a str name, e.g. 'household', 'paper', 'plastic', 'organic', 'wood', 'industrial'
+          - an int index 0-5 matching the same order
+        When a type name/index is given, `amount` sets the quantity added (default 10).
+        """
+        if isinstance(waste, (str, int)):
+            waste = BurnableWasteStorage._waste_from_type(waste, amount)
+        if waste is None or waste.amount <= 0:
+            return 0.0
+        added_amount = min(waste.amount, self.available_capacity())
+        if added_amount <= 0:
+            return 0.0
+        self.waste_batches.append(waste.copy_with_amount(added_amount))
+        return added_amount
+
+    def clear(self):
+        """Empty the storage and refill it with random waste batches of size 9."""
+        self.waste_batches = []
+        while self.available_capacity() >= 9.0:
+            self.add_waste(-1, 9.0)
+
+    def remove_waste(self, amount):
+        amount_to_remove = min(max(amount, 0.0), self.total_amount())
+        if amount_to_remove <= 0:
+            return BurnableWaste()
+
+        removed = []
+        remaining = amount_to_remove
+        while remaining > 0 and self.waste_batches:
+            batch = self.waste_batches[0]
+            take = min(batch.amount, remaining)
+            removed.append(batch.copy_with_amount(take))
+            batch.amount -= take
+            remaining -= take
+            if batch.amount <= 0:
+                self.waste_batches.pop(0)
+
+        return self._blend(removed)
+
+    def _blend(self, waste_parts):
+        if not waste_parts:
+            return BurnableWaste()
+        total = sum(w.amount for w in waste_parts)
+        if total <= 0:
+            return BurnableWaste()
+
+        def weighted(attr):
+            return sum(getattr(w, attr) * w.amount for w in waste_parts) / total
+
+        return BurnableWaste(
+            amount=total,
+            energy_density=weighted('energy_density'),
+            acid_amount=weighted('acid_amount'),
+            co_amount=weighted('co_amount'),
+            moisture_content=weighted('moisture_content'),
+            ash_content=weighted('ash_content'),
+        )
+
+
 class PowerPlant:
     def __init__(self, requirements):
         # Ref to requirements for scaling power output and emissions
         self.requirements = requirements
         # Parameters related to the storage of burnable waste
-        self.storage_amount_max = 64.0
-        self.storage_amount = self.storage_amount_max
+        self.storage_amount_max = 128.0
+        self.storage = BurnableWasteStorage(self.storage_amount_max)
+       
         # oven state
-        self.oven_amount_initial = 13.0
+        self.oven_amount_initial = 26.0
         self.oven_amount = self.oven_amount_initial
-        self.oven_amount_max = 26.0
-        self.oven_amount_ok_min = 8.0
-        self.oven_amount_ok_max = 18.0
-        self.oven_amount_to_fill = 4.0
+        self.oven_waste = BurnableWaste(
+            amount=self.oven_amount_initial,
+            energy_density=1.0,
+            acid_amount=0.22,
+            co_amount=0.25,
+            moisture_content=0.16,
+            ash_content=0.08,
+        )
+        self.oven_amount_max = 36.0
+        self.oven_amount_ok_min = 16.0
+        self.oven_amount_ok_max = 25.0
+        self.oven_amount_to_fill = 9.0
         self.oven_consumption_rate = 0.3
         # Air flow state
         self.air_flow = 0.5
 
         # power generation state
-        self.power_max = 60  # MW
-        self.alpha_up = 0.008
-        self.alpha_down = 0.004
+        self.power_max = 80  # MW
+        self.calorific_scaling = 2.0
+        self.alpha_up = 0.004
+        self.alpha_down = 0.002
         self.alpha_empty = 0.01
         # initialise filter using the current electricity requirement baseline
         self.power_filter = OnePole(0.1, self.requirements.get_total_need_at(0))
+        self.lambda_val = 1.0
         self.v1 = 0.0
 
         # Turbine amount, i.e. the percentage of power that is converted to electricity
-        self.turbine_pct = 0.3
+        self.turbine_pct = 0.66
         self.turbine_pct_filter = OnePole(0.1, self.turbine_pct)
 
         # Emission
@@ -355,7 +519,7 @@ class PowerPlant:
         self.CO_emission = OnePole(0.05, 0.0)
 
     def get_storage_pct(self):
-        return self.storage_amount / self.storage_amount_max
+        return self.storage.fill_ratio()
     
     def get_oven_pct(self):
         return self.oven_amount / self.oven_amount_max
@@ -419,41 +583,92 @@ class PowerPlant:
     
     def fill_oven(self):
         space = self.oven_amount_max - self.oven_amount
-        if self.storage_amount >= self.oven_amount_to_fill and space >= self.oven_amount_to_fill:
-            self.oven_amount += self.oven_amount_to_fill
-            self.storage_amount -= self.oven_amount_to_fill
-        elif space >= self.oven_amount_to_fill:
-            self.oven_amount += self.storage_amount
-            self.storage_amount = 0
+        if space <= 0:
+            return
+
+        amount_to_add = min(self.oven_amount_to_fill, space)
+        incoming_waste = self.storage.remove_waste(amount_to_add)
+        if incoming_waste.amount <= 0:
+            return
+
+        current_oven_amount = max(self.oven_waste.amount, 0.0)
+        total = current_oven_amount + incoming_waste.amount
+        if total <= 0:
+            return
+
+        def blend(current_value, incoming_value):
+            return (current_value * current_oven_amount + incoming_value * incoming_waste.amount) / total
+
+        self.oven_waste = BurnableWaste(
+            amount=total,
+            energy_density=blend(self.oven_waste.energy_density, incoming_waste.energy_density),
+            acid_amount=blend(self.oven_waste.acid_amount, incoming_waste.acid_amount),
+            co_amount=blend(self.oven_waste.co_amount, incoming_waste.co_amount),
+            moisture_content=blend(self.oven_waste.moisture_content, incoming_waste.moisture_content),
+            ash_content=blend(self.oven_waste.ash_content, incoming_waste.ash_content),
+        )
+        self.oven_amount = self.oven_amount + incoming_waste.amount
     
     def calculate_acid_emission(self):
-        # Calculate 
-        acid_emission = self.get_total_power_pct() * (1-self.CaCO3_amount) * 0.6
+        # Waste chemistry drives baseline emissions; additives reduce them.
+        acid_emission = self.get_total_power_pct() * (self.oven_waste.acid_amount - self.CaCO3_amount)
         return self.acid_emission.update(acid_emission)
         
     def calculate_CO_emission(self):
-        CO_emission = self.get_total_power_pct() * (1-self.NaOH_amount) * 0.4
+        lambda_scaling = 1.0
+        if self.get_lambda() < 1.0:
+            lambda_scaling = 1.0 + 2.0 * (1.0 - self.get_lambda())  # Sharp increase as lambda drops below 1
+        CO_emission = self.get_total_power_pct() * (self.oven_waste.co_amount - self.NaOH_amount) * lambda_scaling
         return self.CO_emission.update(CO_emission)
 
     def calculate_power(self):
-        tmp_power = self.air_flow * self.get_oven_pct() * self.power_max
-        oven_factor = 0.8 + 0.3 * self.oven_amount / self.oven_amount_max
-        bio_factor = 1.0
-        consumption = (0.3 + 0.7 * tmp_power / self.power_max) * oven_factor * self.oven_consumption_rate
-        if self.oven_amount > self.oven_amount_ok_max + 0.5:
-            consumption *= 1 + (self.oven_amount - self.oven_amount_ok_max)
-        elif self.oven_amount < self.oven_amount_ok_min - 0.5:
-            bio_factor = max(1 - 0.02 * (self.oven_amount_ok_min - self.oven_amount), 0.0)
-        self.oven_amount = max(self.oven_amount - consumption, 0.0)
-        if self.oven_amount == 0.0:
-            bio_factor = 0
+        oven_pct       = self.get_oven_pct()
+        moisture       = self.oven_waste.moisture_content
+        ash            = self.oven_waste.ash_content
+        energy_density = self.oven_waste.energy_density
+
+        # --- Lambda: air-to-fuel ratio ---
+        # Stoichiometric point: air_flow == oven_pct → λ = 1.
+        # λ < 1 → oxygen-starved, incomplete combustion, CO rises.
+        # λ > 1 → excess air → good burn but progressive dilutive cooling.
+        self.lambda_val = self.air_flow / (oven_pct + 1e-9)
+
+        # if lambda_val < 1.0:
+        #     combustion_eff = lambda_val                    # limited by O₂
+        # elif lambda_val <= 1.3:
+        #     combustion_eff = 1.0                           # optimal lean-burn window
+        # else:
+        #     combustion_eff = max(0.25, 1.3 / lambda_val)  # excess-air cooling
+
+        if self.lambda_val < 1.0:
+            combustion_eff = self.lambda_val               # limited by O₂
+        else:
+            combustion_eff = 1.0                           # optimal lean-burn window
+
+        # --- Moisture factor ---
+        # Wet waste must first evaporate its water before combustion can proceed,
+        # reducing both the burn rate and the net calorific value released.
+        moisture_factor = max(0.0, 1.0 - 1.2 * moisture)
+
+        # --- Burn rate: waste consumed per time-step ---
+        # Driven by oxygen supply (air_flow) and combustion surface area (oven_pct),
+        # strongly dampened by moisture.
+        burn_rate = self.air_flow * oven_pct * moisture_factor * self.oven_consumption_rate
+        self.oven_amount = max(self.oven_amount - burn_rate, 0.0)
+        self.oven_waste.amount = self.oven_amount
+
+        # --- Target thermal power ---
+        # Released heat ∝ burn_rate × net calorific value × combustion efficiency.
+        # Net calorific value: ash is inert (doesn't burn); moisture lowers energy yield.
+        if self.oven_amount <= 0.0:
             self.power_filter.update_alpha(0.0, self.alpha_empty)
         else:
-            tmp_power = tmp_power * bio_factor
-            if tmp_power > self.power_filter.get():
-                self.power_filter.update_alpha(tmp_power, self.alpha_up)
-            elif tmp_power < self.power_filter.get():
-                self.power_filter.update_alpha(tmp_power, self.alpha_down)
+            net_calorific = energy_density * (1.0 - ash) * moisture_factor * self.calorific_scaling
+            target_power  = self.air_flow * oven_pct * net_calorific * combustion_eff * self.power_max
+            target_power  = max(0.0, min(target_power, self.power_max))
+
+            alpha = self.alpha_up if target_power > self.power_filter.get() else self.alpha_down
+            self.power_filter.update_alpha(target_power, alpha)
 
         return self.power_filter.get()
     
@@ -561,12 +776,11 @@ fig2 = create_plot_on_monitor(monitors[0], plot_heat)  # Assign to monitor 0
 plt.tight_layout()
 
 def sendElData():
-    global storage_amount
     oscSenderTeensy.send_message("/OvenAmount", energy_grid.powerplant.oven_amount/energy_grid.powerplant.oven_amount_max)
     oscSenderTeensy.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
     oscSenderTeensy.send_message("/OvenPower", energy_grid.powerplant.get_total_power_pct())
-    oscSenderTeensy.send_message("/WindPower", energy_grid.wind_generator.get(index)/energy_grid.wind_generator.max)
-    oscSenderTeensy.send_message("/SunPower", energy_grid.sun_generator.get(index)/energy_grid.sun_generator.max)
+    oscSenderTeensy.send_message("/WindPower", energy_grid.wind_generator.get_available_power(index)/energy_grid.wind_generator.max)
+    oscSenderTeensy.send_message("/SunPower", energy_grid.sun_generator.get_available_power(index)/energy_grid.sun_generator.max)
     oscSenderTeensy.send_message("/Acid", energy_grid.powerplant.get_acid_emission())
     oscSenderTeensy.send_message("/CO", energy_grid.powerplant.get_CO_emission())
     oscSenderTeensy.send_message("/ElectricityPct", energy_grid.powerplant.get_electricity_pct())
@@ -668,9 +882,8 @@ def oscCmd(addr, value):
     elif value == 'stop':
         run = 0
     elif value == 'StartButton':
-        run = 0
         clear()
-        run = 1
+        run = not run
     elif value == 'FillButton':
         energy_grid.powerplant.fill_oven()
     elif value == 'Reset':
