@@ -24,6 +24,11 @@ import json
 from scipy.interpolate import interp1d
 from dataclasses import dataclass
 
+
+# Run is FullScreen on two displays?
+FullScreen = False
+
+
 # ==================== RASPBERRY PI OPTIMIZATION ====================
 # Optimize matplotlib rendering and system performance
 os.environ['MPLBACKEND'] = 'TkAgg'
@@ -224,10 +229,10 @@ class WindGenerator:
         self.max = 35.0  # Max Wind Power in MW
         self.n = 0
         self.N = 15
-        self.mean = 20.0
+        self.mean = 10.0
         self.sd = 15.0
-        self.f1 = OnePole(0.10, self.mean)
-        self.f2 = OnePole(0.01, self.mean)
+        self.f1 = OnePole(0.05, self.mean)
+        self.f2 = OnePole(0.005, self.mean)
         self.power = self.mean
         self.tmp = self.mean
         self.vector = np.zeros(N)
@@ -333,7 +338,6 @@ class BurnableWaste:
     acid_amount: float = 0.2
     co_amount: float = 0.2
     moisture_content: float = 0.15
-    ash_content: float = 0.08
 
     def copy_with_amount(self, amount):
         return BurnableWaste(
@@ -342,24 +346,22 @@ class BurnableWaste:
             acid_amount=self.acid_amount,
             co_amount=self.co_amount,
             moisture_content=self.moisture_content,
-            ash_content=self.ash_content,
         )
 
     def effective_energy_factor(self):
-        # Moisture and ash reduce the effective energy released from the fuel.
-        return max(0.2, self.energy_density * (1.0 - 0.6 * self.moisture_content) * (1.0 - 0.5 * self.ash_content))
+        # Moisture reduces the effective energy released from the fuel.
+        return max(0.2, self.energy_density * (1.0 - 0.6 * self.moisture_content))
 
 
 class BurnableWasteStorage:
     # Preset profiles for common waste streams delivered to the plant.
     # Keys are both the integer index and the lowercase name (resolved in _waste_from_type).
     WASTE_TYPES = {
-        0: dict(name="household",  energy_density=0.85, acid_amount=0.25, co_amount=0.28, moisture_content=0.22, ash_content=0.12),
-        1: dict(name="paper",      energy_density=0.90, acid_amount=0.10, co_amount=0.15, moisture_content=0.08, ash_content=0.06),
-        2: dict(name="plastic",    energy_density=1.40, acid_amount=0.45, co_amount=0.50, moisture_content=0.02, ash_content=0.04),
-        3: dict(name="organic",    energy_density=0.40, acid_amount=0.12, co_amount=0.18, moisture_content=0.60, ash_content=0.18),
-        4: dict(name="wood",       energy_density=1.05, acid_amount=0.08, co_amount=0.20, moisture_content=0.25, ash_content=0.05),
-        5: dict(name="industrial", energy_density=1.20, acid_amount=0.55, co_amount=0.45, moisture_content=0.05, ash_content=0.15),
+        0: dict(name="household",  energy_density=0.85, acid_amount=0.25, co_amount=0.28, moisture_content=0.22),
+        1: dict(name="paper",      energy_density=0.90, acid_amount=0.10, co_amount=0.15, moisture_content=0.08),
+        2: dict(name="plastic",    energy_density=1.40, acid_amount=0.45, co_amount=0.70, moisture_content=0.02),
+        3: dict(name="wood",       energy_density=1.05, acid_amount=0.08, co_amount=0.20, moisture_content=0.25),
+        4: dict(name="industrial", energy_density=1.20, acid_amount=0.75, co_amount=0.45, moisture_content=0.05),
     }
     _WASTE_TYPE_BY_NAME = {v["name"]: k for k, v in WASTE_TYPES.items()}
 
@@ -393,7 +395,6 @@ class BurnableWasteStorage:
             acid_amount=props["acid_amount"],
             co_amount=props["co_amount"],
             moisture_content=props["moisture_content"],
-            ash_content=props["ash_content"],
         )
 
     def total_amount(self):
@@ -466,7 +467,6 @@ class BurnableWasteStorage:
             acid_amount=weighted('acid_amount'),
             co_amount=weighted('co_amount'),
             moisture_content=weighted('moisture_content'),
-            ash_content=weighted('ash_content'),
         )
 
 
@@ -487,21 +487,20 @@ class PowerPlant:
             acid_amount=0.22,
             co_amount=0.25,
             moisture_content=0.16,
-            ash_content=0.08,
         )
         self.oven_amount_max = 36.0
         self.oven_amount_ok_min = 16.0
         self.oven_amount_ok_max = 25.0
         self.oven_amount_to_fill = 9.0
-        self.oven_consumption_rate = 0.3
+        self.oven_consumption_rate = 0.4
         # Air flow state
         self.air_flow = 0.5
 
         # power generation state
         self.power_max = 80  # MW
         self.calorific_scaling = 2.0
-        self.alpha_up = 0.004
-        self.alpha_down = 0.002
+        self.alpha_up = 0.008
+        self.alpha_down = 0.008
         self.alpha_empty = 0.01
         # initialise filter using the current electricity requirement baseline
         self.power_filter = OnePole(0.1, self.requirements.get_total_need_at(0))
@@ -515,8 +514,14 @@ class PowerPlant:
         # Emission
         self.CaCO3_amount = 0.0
         self.NaOH_amount = 0.0
-        self.acid_emission = OnePole(0.05, 0.0)
-        self.CO_emission = OnePole(0.05, 0.0)
+        self.acid_emission = OnePole(0.1, 0.0)
+        self.CO_emission = OnePole(0.1, 0.0)
+
+        # Active state
+        self.active = True
+
+    def activate(self, active):
+        self.active = active
 
     def get_storage_pct(self):
         return self.storage.fill_ratio()
@@ -540,7 +545,10 @@ class PowerPlant:
         return 1 - self.turbine_pct_filter.get()
 
     def get_electric_power(self):
-        return self.power_filter.get() * self.get_electricity_pct()
+        if self.active:
+            return self.power_filter.get() * self.get_electricity_pct()
+        else:
+            return 0.0
     
     def get_electric_power_pct(self):
         return self.get_electric_power() / self.power_max
@@ -605,7 +613,6 @@ class PowerPlant:
             acid_amount=blend(self.oven_waste.acid_amount, incoming_waste.acid_amount),
             co_amount=blend(self.oven_waste.co_amount, incoming_waste.co_amount),
             moisture_content=blend(self.oven_waste.moisture_content, incoming_waste.moisture_content),
-            ash_content=blend(self.oven_waste.ash_content, incoming_waste.ash_content),
         )
         self.oven_amount = self.oven_amount + incoming_waste.amount
     
@@ -623,15 +630,17 @@ class PowerPlant:
 
     def calculate_power(self):
         oven_pct       = self.get_oven_pct()
+        oven_pct_squared = oven_pct * oven_pct
+        airflow = self.air_flow
+        airflow_squared = airflow * airflow
         moisture       = self.oven_waste.moisture_content
-        ash            = self.oven_waste.ash_content
         energy_density = self.oven_waste.energy_density
 
         # --- Lambda: air-to-fuel ratio ---
         # Stoichiometric point: air_flow == oven_pct → λ = 1.
         # λ < 1 → oxygen-starved, incomplete combustion, CO rises.
         # λ > 1 → excess air → good burn but progressive dilutive cooling.
-        self.lambda_val = self.air_flow / (oven_pct + 1e-9)
+        self.lambda_val = airflow / (oven_pct + 1e-9)
 
         # if lambda_val < 1.0:
         #     combustion_eff = lambda_val                    # limited by O₂
@@ -653,18 +662,18 @@ class PowerPlant:
         # --- Burn rate: waste consumed per time-step ---
         # Driven by oxygen supply (air_flow) and combustion surface area (oven_pct),
         # strongly dampened by moisture.
-        burn_rate = self.air_flow * oven_pct * moisture_factor * self.oven_consumption_rate
+        burn_rate = airflow_squared * oven_pct_squared * moisture_factor * self.oven_consumption_rate
         self.oven_amount = max(self.oven_amount - burn_rate, 0.0)
         self.oven_waste.amount = self.oven_amount
 
         # --- Target thermal power ---
         # Released heat ∝ burn_rate × net calorific value × combustion efficiency.
-        # Net calorific value: ash is inert (doesn't burn); moisture lowers energy yield.
+        # Net calorific value: moisture lowers energy yield.
         if self.oven_amount <= 0.0:
             self.power_filter.update_alpha(0.0, self.alpha_empty)
         else:
-            net_calorific = energy_density * (1.0 - ash) * moisture_factor * self.calorific_scaling
-            target_power  = self.air_flow * oven_pct * net_calorific * combustion_eff * self.power_max
+            net_calorific = energy_density * moisture_factor * self.calorific_scaling
+            target_power  = airflow_squared * oven_pct * net_calorific * combustion_eff * self.power_max
             target_power  = max(0.0, min(target_power, self.power_max))
 
             alpha = self.alpha_up if target_power > self.power_filter.get() else self.alpha_down
@@ -686,6 +695,28 @@ class PowerPlant:
     def reset(self):
         self.__init__(self.requirements)
        
+# Class to keep track of the amount of MW being bought from or sold to the market. 
+# Negative values indicate selling to the market, positive values indicate buying from the market.
+class ElectricMarket:
+    def __init__(self):
+        self.reset()
+        self.max = 20.0  # Max amount of MW that can be bought or sold
+        self.batch = 5.0  # Amount of MW to buy/sell in one transaction
+
+    def set(self, amount):
+        self.amount = amount
+
+    def get(self):
+        return self.amount
+    
+    def reset(self):
+        self.amount = 0.0
+
+    def sell(self):
+        self.amount = max(self.amount - self.batch, -self.max)
+
+    def buy(self):
+        self.amount = min(self.amount + self.batch, self.max)
 
 # EnergyGrid class to manage the overall energy production and consumption balance
 class EnergyGrid:
@@ -694,20 +725,22 @@ class EnergyGrid:
         self.wind_generator = WindGenerator()
         self.sun_generator = SunGenerator()
         self.powerplant = PowerPlant(self.requirements)
+        self.electric_market = ElectricMarket()
 
     def reset(self):
         self.wind_generator.make_new_vector()
         self.sun_generator.make_new_vector()
         self.powerplant.reset()
+        self.electric_market.reset()
 
     def get_total_electricity(self, index):
-        return self.wind_generator.get(index) + self.sun_generator.get(index) + self.powerplant.get_electric_power()        
+        return self.wind_generator.get(index) + self.sun_generator.get(index) + self.powerplant.get_electric_power() + self.electric_market.get()       
 
     def get_total_heat(self, index):
         return self.powerplant.get_heat_power()
 
     def get_total_production(self, index):
-        return self.wind_generator.get(index) + self.sun_generator.get(index) + self.powerplant.get_total_power()
+        return self.wind_generator.get(index) + self.sun_generator.get(index) + self.powerplant.get_total_power() + self.electric_market.get()  
 
     def calculate(self, index):
         # Calculate the power plant output first as it depends on the current state of the oven and air flow
@@ -715,8 +748,9 @@ class EnergyGrid:
         # Then calculate the wind and sun power for the current time step
         wind_power = self.wind_generator.get(index)
         sun_power = self.sun_generator.get(index)
+        market_power = self.electric_market.get()
         # Return the total production
-        return wind_power + sun_power + plant_power
+        return wind_power + sun_power + plant_power + market_power
 
 
 
@@ -772,7 +806,8 @@ plt.ioff()  # Turn off interactive mode to prevent blocking
 
 fig1 = create_plot_on_monitor(monitors[0], plot_electricity)  # Assign to monitor 1
 plt.tight_layout()
-fig2 = create_plot_on_monitor(monitors[0], plot_heat)  # Assign to monitor 0
+
+fig2 = create_plot_on_monitor(monitors[1 if FullScreen else 0], plot_heat)  # Assign to monitor 0
 plt.tight_layout()
 
 def sendElData():
@@ -791,6 +826,7 @@ def sendElData():
     oscSenderTeensy.send_message("/NaOH", energy_grid.powerplant.NaOH_amount)
     oscSenderTeensy.send_message("/TurbinePct", energy_grid.powerplant.turbine_pct)
     oscSenderTeensy.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
+    oscSenderTeensy.send_message("/Buy", energy_grid.electric_market.get()/energy_grid.electric_market.batch)
     oscSenderOvenDisplay.send_message("/OvenIntensity", energy_grid.powerplant.get_oven_temperature_pct())
     oscSenderStorageDisplay.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
 
@@ -824,6 +860,7 @@ def clear():
     td = 0
 
     updatePlot()
+    updateHeatPlot()
 
 
 
@@ -856,7 +893,7 @@ def animate(i):
         index = index + 1
     
     # Minimal sleep to prevent CPU spinning (set to 0 for maximum speed on RPi)
-    time.sleep(0.01)
+    time.sleep(0.05)
 
 def animateHeat(i):
     global index, run, t, td
@@ -907,10 +944,13 @@ dispatcher.map("/cmd", oscCmd)
 dispatcher.map("/AmountInOven", oscAmountInOven)
 dispatcher.map("/UseWind", lambda addr, value: energy_grid.wind_generator.activate(value))
 dispatcher.map("/UseSun", lambda addr, value: energy_grid.sun_generator.activate(value))
+dispatcher.map("/UsePlant", lambda addr, value: energy_grid.powerplant.activate(value))
 dispatcher.map("/FillOven", lambda addr, value: energy_grid.powerplant.fill_oven())
 dispatcher.map("/CaCO3", lambda addr, value: energy_grid.powerplant.set_CaCO3_amount(value))
 dispatcher.map("/NaOH", lambda addr, value: energy_grid.powerplant.set_NaOH_amount(value))
 dispatcher.map("/TurbinePct", lambda addr, value: energy_grid.powerplant.set_turbine_pct(value))
+dispatcher.map("/BuyBu", lambda addr: energy_grid.electric_market.buy())
+dispatcher.map("/SellBu", lambda addr: energy_grid.electric_market.sell())
 
 # Print all incoming messages
 def print_handler(address, *args):
@@ -937,11 +977,11 @@ ani1 = FuncAnimation(fig1, animate, interval=50, blit=False, cache_frame_data=Fa
 ani2 = FuncAnimation(fig2, animateHeat, interval=50, blit=False, cache_frame_data=False)
 
 plt.figure(fig1.number)
-fig1.canvas.manager.window.attributes('-fullscreen', False)
+fig1.canvas.manager.window.attributes('-fullscreen', FullScreen)
 fig1.canvas.draw()
 
 plt.figure(fig2.number)
-fig2.canvas.manager.window.attributes('-fullscreen', False)
+fig2.canvas.manager.window.attributes('-fullscreen', FullScreen)
 fig2.canvas.draw()
 
 # Show the plots (this will block until the windows are closed)
