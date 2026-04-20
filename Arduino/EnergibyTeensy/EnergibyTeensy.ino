@@ -108,12 +108,12 @@ bool city_missing_electricity = true;
 bool elActive = true;
 bool heatActive = true;
 
-float time = 11.0f;
-float timeOfDay = time;
+float g_time = 11.0f;
+float timeOfDay = g_time;
 
 void setTime(float t){
-  time = t;
-  timeOfDay = time;
+  g_time = t;
+  timeOfDay = g_time;
   while(timeOfDay > 24.0f) timeOfDay -= 24.0f;
 }
 
@@ -694,7 +694,7 @@ void cityLightsLoop(){
 
     for(int i=0; i<NUM_cityLights; i++){
       auto& x = cityLights[i];
-      if(x.update(time) && i < elFilter.value*NUM_cityLights){
+      if(x.update(g_time) && i < elFilter.value*NUM_cityLights){
         analogWrite(x.pin, x.pwm * elFilter.value);
       }
       else {
@@ -775,7 +775,7 @@ void oscElData(OSCMessage& msg){
   Serial.print("productionMin: ");      Serial.println(productionMin);
   Serial.print("gameRunning: ");        Serial.println(gameRunning);
   Serial.print("silo_available_pct: "); Serial.println(silo_available_pct);
-  Serial.print("time: ");               Serial.print(time);
+  Serial.print("time: ");               Serial.print(g_time);
   Serial.print(", DayTime: ");          Serial.println(timeOfDay);
 
   productionPercent = production / productionMin;
