@@ -260,6 +260,12 @@ struct LEDMeter {
     m_value = value;
   }
 
+  void set_color(uint8_t red, uint8_t green, uint8_t blue){
+    r = red;
+    g = green;
+    b = blue;
+  }
+
   void update(bool show=false){
     if(m_max_value == m_min_value){
       for(int i=0; i<m_numPixels; i++) {
@@ -287,8 +293,8 @@ struct LEDMeter {
 
         for(int i=0; i<negativePixels; i++) {
           int pixelIndex = negativePixels - 1 - i;
-          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(255,0,0));
-          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(255*scale,0,0));
+          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r,g,b));
+          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));
         }
       }
       else if(m_value > 0 && positivePixels > 0){
@@ -300,8 +306,8 @@ struct LEDMeter {
 
         for(int i=0; i<positivePixels; i++) {
           int pixelIndex = positiveStart + i;
-          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(255,0,0));
-          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(255*scale,0,0));
+          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r,g,b));
+          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));
         }
       }
     }
@@ -316,14 +322,19 @@ struct LEDMeter {
       float scale = numOn-numFullOn;
 
       for(int i=0; i<m_numPixels; i++) {
-        if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(255,0,0));
-        else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(255*scale,0,0));
+        if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(r,g,b));
+        else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));
       }
     }
     if(show) m_strip_ref.show();                          
   }
 
   Adafruit_NeoPixel& m_strip_ref;
+
+  uint8_t r = 255;
+  uint8_t g = 0;
+  uint8_t b = 0;
+  
   int m_startPixel;
   int m_numPixels;
 
@@ -400,14 +411,14 @@ LEDButton buyElectricityButton  (BU6_BUY_ELECTRICITY_PIN  , LED6_BUY_ELECTRICITY
 LEDButton sellElectricityButton (BU7_SELL_ELECTRICITY_PIN , LED7_SELL_ELECTRICITY_PIN , false         , 20);
 
 // Create LED Meter Objects
-LEDMeter ovenPctMeter            (strip1 , 0  , 20 , 0 , 1);
-LEDMeter airSpeedMeter           (strip1 , 20 , 20 , 0 , 1);
-LEDMeter ovenEffectMeter         (strip1 , 40 , 20 , 0 , 1);
-LEDMeter turbinePctMeter         (strip1 , 60 , 20 , 0 , 1);
-LEDMeter heatPctMeter            (strip1 , 80 , 20 , 0 , 1);
-LEDMeter windProductionMeter     (strip2 , 0  , 26 , 0 , 1);
-LEDMeter solarProductionMeter    (strip2 , 26 , 26 , 0 , 1);
-LEDMeter plantProductionMeter    (strip2 , 52 , 26 , 0 , 1);
+LEDMeter ovenPct                 (strip1 , 0  , 20 , 0 , 1);
+LEDMeter airFlow                 (strip1 , 20 , 20 , 0 , 1);
+LEDMeter plantPower              (strip1 , 40 , 20 , 0 , 1);
+LEDMeter turbinePct              (strip1 , 60 , 20 , 0 , 1);
+LEDMeter heatPct                 (strip1 , 80 , 20 , 0 , 1);
+LEDMeter windPower               (strip2 , 0  , 26 , 0 , 1);
+LEDMeter solarPower              (strip2 , 26 , 26 , 0 , 1);
+LEDMeter plantElectricPower      (strip2 , 52 , 26 , 0 , 1);
 LEDMeter buySellElectricityMeter (strip2 , 78 , 8  ,-1 , 1);
 LEDMeter dosing_meter1           (strip3 , 0  , 20 , 0 , 1);
 LEDMeter dosing_meter2           (strip3 , 20 , 20 , 0 , 1);
@@ -635,13 +646,6 @@ void sendOsc(OSCMessage& msg, const IPAddress& ip, const unsigned int port){
   Udp.endPacket();
 }
 
-/*  
-  buySellElectricityMeter.update();
-  dosing_meter1          .update();
-  dosing_meter2          .update();
-*/
-
-
 bool loopOsc(){
   bool activity = false;
   // Parse Incomming OSC
@@ -668,44 +672,57 @@ bool loopOsc(){
       msg.fill(Udp.read());
     }
     if(!msg.hasError()){
-      msg.route   ("/Led" , oscLed);
-      msg.dispatch("/ElData" , oscElData);
-
       msg.dispatch("/OvenAmount" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        ovenPctMeter.set_value(v);
+        ovenPct.set_value(v);
       });
 
       msg.dispatch("/OvenAirFlow" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        airSpeedMeter.set_value(v);
+        airFlow.set_value(v);
       });
 
       msg.dispatch("/PlantPower" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        ovenEffectMeter.set_value(v);
+        plantPower.set_value(v);
       });
 
       msg.dispatch("/TurbinePct" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        turbinePctMeter.set_value(v);
-        heatPctMeter.set_value(1.0f - v);
+        turbinePct.set_value(v);
+        heatPct.set_value(1.0f - v);
       });
 
       msg.dispatch("/PlantElectricPower" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        plantProductionMeter.set_value(v);
+        plantElectricPower.set_value(v);
       });
 
       msg.dispatch("/WindPower" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        windProductionMeter.set_value(v);
+        windPower.set_value(v);
       });
 
       msg.dispatch("/SunPower" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        solarProductionMeter.set_value(v);
+        solarPower.set_value(v);
       });
+
+      msg.dispatch("/Buy" , [](OSCMessage& m){
+        float v = m.getFloat(0);
+        buySellElectricityMeter.set_value(v);
+      });
+
+      msg.dispatch("/CaCO3" , [](OSCMessage& m){
+        float v = m.getFloat(0);
+        dosing_meter1.set_value(v);
+      });
+
+      msg.dispatch("/NaOH" , [](OSCMessage& m){
+        float v = m.getFloat(0);
+        dosing_meter2.set_value(v);
+      });
+
       // msg.getAddress(str);
       // Serial.println(str);
       activity = true;
@@ -770,14 +787,14 @@ bool loopButtons(){
 bool loopLEDMeters()
 {
   bool activity = false;
-  ovenPctMeter           .update();
-  airSpeedMeter          .update();
-  ovenEffectMeter        .update();
-  turbinePctMeter        .update();
-  heatPctMeter           .update();
-  windProductionMeter    .update();
-  solarProductionMeter   .update();
-  plantProductionMeter   .update();
+  ovenPct           .update();
+  airFlow          .update();
+  plantPower        .update();
+  turbinePct        .update();
+  heatPct           .update();
+  windPower    .update();
+  solarPower   .update();
+  plantElectricPower   .update();
   buySellElectricityMeter.update();
   dosing_meter1          .update();
   dosing_meter2          .update();
@@ -962,46 +979,4 @@ void setBarLed(Adafruit_NeoPixel& strip, int offset, int numPixels, float value,
   if(show) strip.show();                          
 }
 
-void oscElData(OSCMessage& msg){
-  // Serial.print("ElData Received, Size: ");
-  // Serial.print(msg.size());
-  // Serial.print(", tags: ");
-  // for(int i=0; i<msg.size(); i++){
-  //   Serial.print(msg.getType(i));
-  // }
-  // Serial.println();
- 
-  if(msg.isFloat(1)) sol                = msg.getFloat(1);
-  if(msg.isFloat(2)) bio                = msg.getFloat(2);
-  if(msg.isFloat(3)) amountInOven       = msg.getFloat(3);
-  if(msg.isFloat(4)) amountInStorage    = msg.getFloat(4);
-  if(msg.isFloat(5)) production         = msg.getFloat(5);
-  if(msg.isFloat(6)) productionMin      = msg.getFloat(6);
-  if(msg.isInt  (7)) gameRunning        = msg.getInt  (7);
-  if(msg.isFloat(8)) setTime(msg.getFloat(9));
-
-  Serial.print("Sol: ");                Serial.println(sol);
-  Serial.print("Bio: ");                Serial.println(bio);
-  Serial.print("amountInOven: ");       Serial.println(amountInOven);
-  Serial.print("amountInStorage: ");    Serial.println(amountInStorage);
-  Serial.print("production: ");         Serial.println(production);
-  Serial.print("productionMin: ");      Serial.println(productionMin);
-  Serial.print("gameRunning: ");        Serial.println(gameRunning);
-  Serial.print("time: ");               Serial.print(g_time);
-  Serial.print(", DayTime: ");          Serial.println(timeOfDay);
-
-  productionPercent = production / productionMin;
-  if(productionPercent > 1.0f) productionPercent = 1.0f;
-}
-
-void oscReset(OSCMessage& msg){
-
-}
- 
-
- 
-
-void oscLed(OSCMessage& msg, int addr_offset){
-  Serial.println("Led Received");
-}
- 
+  
