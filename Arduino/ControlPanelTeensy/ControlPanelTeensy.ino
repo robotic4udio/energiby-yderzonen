@@ -4,7 +4,7 @@
 #include <OSCBundle.h>
 #include <OSCData.h>
 #include <Adafruit_NeoPixel.h>
-#include <Bounce.h>
+#include <Bounce2.h>
 
 #define PRINT_DEBUG
 
@@ -61,18 +61,13 @@
 elapsedMillis ledOnMillis;
 
 // NeoPixel Led Strips
-#define NUM_NEOPIXEL_STRIPS 7
-const unsigned char NeoPixelPin[NUM_NEOPIXEL_STRIPS]   = {34, 35, 36, 37, 38, 39, 40};
-const unsigned char NeoPixelCount[NUM_NEOPIXEL_STRIPS] = {20, 20, 20, 20, 20, 20, 20};
-Adafruit_NeoPixel strip1(NeoPixelCount[0], NeoPixelPin[0], NEO_GRB + NEO_KHZ800); // 1 - PIN 26: 8x8  Matrix
-Adafruit_NeoPixel strip2(NeoPixelCount[1], NeoPixelPin[1], NEO_GRB + NEO_KHZ800); // 2 - PIN 33: 3x26 Left Side
-Adafruit_NeoPixel strip3(NeoPixelCount[2], NeoPixelPin[2], NEO_GRB + NEO_KHZ800); // 3 - PIN 36:
-Adafruit_NeoPixel strip4(NeoPixelCount[3], NeoPixelPin[3], NEO_GRB + NEO_KHZ800); // 4 - PIN 35: 3x14 Vind, Sol, Affald
-Adafruit_NeoPixel strip5(NeoPixelCount[4], NeoPixelPin[4], NEO_RGB + NEO_KHZ800); // 5 - PIN 37: 2x1 Led -- Byen mangler fjernvarme, Byen mangler strøm
-Adafruit_NeoPixel strip6(NeoPixelCount[5], NeoPixelPin[5], NEO_GRB + NEO_KHZ800); // 6 - PIN 38: Varme i Vejen
-Adafruit_NeoPixel strip7(NeoPixelCount[6], NeoPixelPin[6], NEO_GRB + NEO_KHZ800); // 7 - PIN 27: 
+#define NUM_NEOPIXEL_STRIPS 4
+Adafruit_NeoPixel strip1(145, STRIP1_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip2(145, STRIP2_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip3(145, STRIP3_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip4(145, STRIP4_PIN, NEO_GRB + NEO_KHZ800);
 
-Adafruit_NeoPixel* strips[NUM_NEOPIXEL_STRIPS] = {&strip1, &strip2, &strip3, &strip4, &strip5, &strip6, &strip7};
+Adafruit_NeoPixel* strips[NUM_NEOPIXEL_STRIPS] = {&strip1, &strip2, &strip3, &strip4};
 
 elapsedMillis pixelUpdateMillis;
 unsigned long pixelUpdateInterval = 39;
@@ -83,46 +78,16 @@ int pulse_vec[PULSELEN] = {15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 1
 
 bool gameRunning = false;
 
-
-// Sol Variables
-auto& sol_strip = strip4;
-float sol = 0.0f;
-float sol_max = 5.0f;
-float sol_numPixels = 14;
-int sol_pixelOffset = 14;
-
-// Bio Variables
-auto& bio_strip = strip4;
-float bio_numPixels = 14;
-int bio_pixelOffset = 28;
-float bio = 0;
-
-// Ilt
-auto& ilt_strip = strip2;
-float ilt_numPixels = 26;
-int ilt_pixelOffset = 26;
-
+/*
 // Ovn
 int amountInOven = 0;
 int amountInOven_ok_min = 8;
 int amountInOven_ok_max = 18;
 int amountInOven_max = 26;
 int amountInStorage = 64;
+*/
 
-// Production
-float production = 1.0;
-float productionMin = 1.0f;
-float productionPercent = 1.0f;
-
-
-auto& city_power_status_strip = strip5;
-bool city_missing_heat = true;
-bool city_missing_electricity = true;
-
-// 
-bool elActive = true;
-bool heatActive = true;
-
+//Time 
 float g_time = 11.0f;
 float timeOfDay = g_time;
 
@@ -155,18 +120,6 @@ struct OnePole {
   }
 
 };
-
-inline int wrap(int i, int N){
-  while(i >= N) i -= N;
-  while(i < 0 ) i += N;
-  return i;
-}
-
-OnePole elFilter  (0.02 ,1.0);
-OnePole heatFilter(0.01 ,1.0);
-
-float elAmount = 1.0;
-float heatAmount = 1.0;
 
 
 elapsedMillis startButtonElapsed;
@@ -203,23 +156,55 @@ unsigned long start = millis();
 unsigned long current_millis;
 
 elapsedMillis buttonReadMillis;
-unsigned long buttonReadInterval = 23;
+unsigned long buttonReadInterval = 5;
 
 
-struct LEDButton  {
-  LEDButton(const int sw_pin, const int led_pin, bool a_value=false, const int debounceTime=20)
+struct LEDButton {
+  enum ButtonMode {MANUAL, PUSHBUTTON, TOGGLE};
+  enum OSCMode {OSC_NONE, OSC_OFF, OSC_ON, OSC_CHANGE};
+
+  LEDButton(const int sw_pin, const int led_pin, bool a_value=false, ButtonMode a_mode=MANUAL, const int debounceTime=20)
     :m_sw_pin(sw_pin)
     ,m_led_pin(led_pin)
     ,bounce(sw_pin,debounceTime)
     ,m_value(a_value)
-  {}
+    ,m_mode(a_mode)
+  {
+
+  }
 
   void setup(){
-    pinMode(m_sw_pin, INPUT_PULLUP);
+    bounce.attach(m_sw_pin, INPUT_PULLUP);
     pinMode(m_led_pin, OUTPUT);
     setLED(m_value);
   }
 
+  bool update(){
+    bool changed = bounce.update();
+
+    switch(m_mode){
+      case MANUAL:
+        break;
+      case PUSHBUTTON:
+        if(pressed())       setValue(true , true);
+        else if(released()) setValue(false, true);
+        break;
+      case TOGGLE:
+        if(pressed()) toggle(true);
+        break;
+    }
+
+    return changed;
+  }
+
+  bool pressed(){
+    return bounce.fell();
+  }
+
+  bool released(){
+    return bounce.rose();
+  }
+  
   void setLED(bool value){
     digitalWrite(m_led_pin, value);
   }
@@ -227,6 +212,11 @@ struct LEDButton  {
   void setValue(bool value, bool set_led=true){
     m_value = value;
     if(set_led) setLED(m_value);
+    if((!m_value && oscMode == OSC_OFF) || (m_value && oscMode == OSC_ON) || (oscMode == OSC_CHANGE)){
+      oscMsg.empty();
+      oscMsg.add(m_value);
+      sendOsc(oscMsg, PiIp, PiPort);
+    }
   }
 
   bool getValue(){
@@ -238,20 +228,32 @@ struct LEDButton  {
     return m_value;
   }
 
+  void attachOSC(const char* address, OSCMode mode=OSC_CHANGE){
+    oscMsg.setAddress(address);
+    oscMode = mode;
+  }
+
   const int m_sw_pin;
   const int m_led_pin;
   Bounce bounce;
   bool m_value;
+  ButtonMode m_mode;
+
+  OSCMode oscMode = OSC_NONE;
+  OSCMessage oscMsg;
 };
 
 
 struct LEDMeter {
-  LEDMeter(Adafruit_NeoPixel& strip_ref, int startPixel, int numPixels, float min_value=0, float max_value=1)
+  LEDMeter(Adafruit_NeoPixel& strip_ref, int startPixel, int numPixels, float min_value=0, float max_value=1, uint8_t r=255, uint8_t g=0, uint8_t b=0)
     :m_strip_ref(strip_ref)
     ,m_startPixel(startPixel)
     ,m_numPixels(numPixels)
     ,m_min_value(min_value)
     ,m_max_value(max_value)
+    ,m_r(r)
+    ,m_g(g)
+    ,m_b(b)
   {
 
   }
@@ -261,12 +263,26 @@ struct LEDMeter {
   }
 
   void set_color(uint8_t red, uint8_t green, uint8_t blue){
-    r = red;
-    g = green;
-    b = blue;
+    m_r = red;
+    m_g = green;
+    m_b = blue;
   }
 
   void update(bool show=false){
+    uint16_t numPixels = m_strip_ref.numPixels();
+    if(m_startPixel + m_numPixels > numPixels) return; // Out of bounds
+
+
+    if(false)
+    {
+      for(int i=0; i<m_numPixels; i++) {
+        m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(m_r,m_g,m_b));
+      }
+      if(show) m_strip_ref.show();
+      return;
+    }
+
+
     if(m_max_value == m_min_value){
       for(int i=0; i<m_numPixels; i++) {
         m_strip_ref.setPixelColor(m_startPixel+i, 0);
@@ -293,8 +309,8 @@ struct LEDMeter {
 
         for(int i=0; i<negativePixels; i++) {
           int pixelIndex = negativePixels - 1 - i;
-          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r,g,b));
-          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));
+          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(m_r,m_g,m_b));
+          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(m_r*scale,m_g*scale,m_b*scale));
         }
       }
       else if(m_value > 0 && positivePixels > 0){
@@ -306,8 +322,8 @@ struct LEDMeter {
 
         for(int i=0; i<positivePixels; i++) {
           int pixelIndex = positiveStart + i;
-          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r,g,b));
-          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));
+          if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(m_r,m_g,m_b));
+          else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+pixelIndex, Adafruit_NeoPixel::Color(m_r*scale,m_g*scale,m_b*scale));
         }
       }
     }
@@ -322,8 +338,8 @@ struct LEDMeter {
       float scale = numOn-numFullOn;
 
       for(int i=0; i<m_numPixels; i++) {
-        if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(r,g,b));
-        else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));
+        if(i < numFullOn) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(m_r,m_g,m_b));
+        else if(i == numFullOn && scale > 0) m_strip_ref.setPixelColor(m_startPixel+i, Adafruit_NeoPixel::Color(m_r*scale,m_g*scale,m_b*scale));
       }
     }
     if(show) m_strip_ref.show();                          
@@ -331,16 +347,18 @@ struct LEDMeter {
 
   Adafruit_NeoPixel& m_strip_ref;
 
-  uint8_t r = 255;
-  uint8_t g = 0;
-  uint8_t b = 0;
-  
   int m_startPixel;
   int m_numPixels;
 
   float m_min_value = 0;
   float m_max_value = 1;
   float m_value = 0;
+
+  // Color
+  uint8_t m_r = 255;
+  uint8_t m_g = 0;
+  uint8_t m_b = 0;
+
 };
 
 struct VU_Meter {
@@ -401,32 +419,32 @@ struct Pot {
 
 
 
-// Create LED Button Objects.   (pin                      , led_pin                   , initial_value , debounceTime)
-LEDButton startButton           (BU1_START_PIN            , LED1_START_BUTTON_PIN     , false         , 20);
-LEDButton fillButton            (BU2_FILL_OVEN_PIN        , LED2_FILL_OVEN_PIN        , false         , 20);
-LEDButton enableWindButton      (BU3_ENABLE_WIND_PIN      , LED3_ENABLE_WIND_PIN      , true          , 20);
-LEDButton enableSunButton       (BU4_ENABLE_SUN_PIN       , LED4_ENABLE_SUN_PIN       , true          , 20);
-LEDButton enablePlantButton     (BU5_ENABLE_PLANT_PIN     , LED5_ENABLE_PLANT_PIN     , true          , 20);
-LEDButton buyElectricityButton  (BU6_BUY_ELECTRICITY_PIN  , LED6_BUY_ELECTRICITY_PIN  , false         , 20);
-LEDButton sellElectricityButton (BU7_SELL_ELECTRICITY_PIN , LED7_SELL_ELECTRICITY_PIN , false         , 20);
+// Create LED Button Objects.   (pin                      , led_pin                   , initial_value , ButtonMode , debounceTime)
+LEDButton startButton           (BU1_START_PIN            , LED1_START_BUTTON_PIN     , false         , LEDButton::MANUAL     , 20);
+LEDButton fillButton            (BU2_FILL_OVEN_PIN        , LED2_FILL_OVEN_PIN        , false         , LEDButton::PUSHBUTTON , 20);
+LEDButton enableWindButton      (BU3_ENABLE_WIND_PIN      , LED3_ENABLE_WIND_PIN      , true          , LEDButton::TOGGLE     , 20);
+LEDButton enableSunButton       (BU4_ENABLE_SUN_PIN       , LED4_ENABLE_SUN_PIN       , true          , LEDButton::TOGGLE     , 20);
+LEDButton enablePlantButton     (BU5_ENABLE_PLANT_PIN     , LED5_ENABLE_PLANT_PIN     , true          , LEDButton::TOGGLE     , 20);
+LEDButton buyElectricityButton  (BU6_BUY_ELECTRICITY_PIN  , LED6_BUY_ELECTRICITY_PIN  , false         , LEDButton::PUSHBUTTON , 20);
+LEDButton sellElectricityButton (BU7_SELL_ELECTRICITY_PIN , LED7_SELL_ELECTRICITY_PIN , false         , LEDButton::PUSHBUTTON , 20);
 
 // Create LED Meter Objects
-LEDMeter ovenPct                 (strip1 , 0  , 20 , 0 , 1);
-LEDMeter airFlow                 (strip1 , 20 , 20 , 0 , 1);
-LEDMeter plantPower              (strip1 , 40 , 20 , 0 , 1);
-LEDMeter turbinePct              (strip1 , 60 , 20 , 0 , 1);
-LEDMeter heatPct                 (strip1 , 80 , 20 , 0 , 1);
-LEDMeter windPower               (strip2 , 0  , 26 , 0 , 1);
-LEDMeter solarPower              (strip2 , 26 , 26 , 0 , 1);
-LEDMeter plantElectricPower      (strip2 , 52 , 26 , 0 , 1);
-LEDMeter buySellElectricityMeter (strip2 , 78 , 8  ,-1 , 1);
-LEDMeter dosing_meter1           (strip3 , 0  , 20 , 0 , 1);
-LEDMeter dosing_meter2           (strip3 , 20 , 20 , 0 , 1);
+LEDMeter ovenPct                 (strip1 , 0  , 20 , 0 , 1, 255, 0, 100);
+LEDMeter airFlow                 (strip1 , 20 , 20 , 0 , 1, 0, 100, 255);
+LEDMeter plantPower              (strip1 , 40 , 20 , 0 , 1, 255, 100, 0);
+LEDMeter turbinePct              (strip1 , 60 , 20 , 0 , 1, 255, 50, 50);
+LEDMeter heatPct                 (strip1 , 80 , 20 , 0 , 1, 0, 255, 100);
+LEDMeter windPower               (strip2 , 0  , 26 , 0 , 1, 0, 100, 255);
+LEDMeter solarPower              (strip2 , 26 , 26 , 0 , 1, 255, 255, 0);
+LEDMeter plantElectricPower      (strip2 , 52 , 26 , 0 , 1, 255, 255, 255);
+LEDMeter buySellElectricityMeter (strip2 , 78 , 8  ,-1 , 1, 0 , 255, 0);
+LEDMeter dosing_meter1           (strip2 , 86 , 20 , 0 , 1, 100, 100, 100);
+LEDMeter dosing_meter2           (strip2 , 106 , 20 , 0, 1, 0, 50, 200);
 
 // Create VU Meter Objects
-VU_Meter ovenTempVU      (VU_METER_OVEN_TEMP_PIN      , 0 , 500);
-VU_Meter acidEmissionsVU (VU_METER_ACID_EMISSIONS_PIN , 0 , 100);
-VU_Meter coEmissionsVU   (VU_METER_CO_EMISSIONS_PIN   , 0 , 100);
+VU_Meter ovenTempVU      (VU_METER_OVEN_TEMP_PIN      , 0 , 1);
+VU_Meter acidEmissionsVU (VU_METER_ACID_EMISSIONS_PIN , 0 , 1);
+VU_Meter coEmissionsVU   (VU_METER_CO_EMISSIONS_PIN   , 0 , 1);
 
 // Create Potentiometer Objects
 Pot airSpeedPot    (POT1_AIR_SPEED_PIN    , 0 , 1);
@@ -443,6 +461,14 @@ void setupButtons(){
   enablePlantButton     .setup();
   buyElectricityButton  .setup();
   sellElectricityButton .setup();
+
+  // Attach OSC messages to buttons
+  fillButton            .attachOSC("/FillOven"  , LEDButton::OSC_ON);
+  enableWindButton      .attachOSC("/UseWind"   , LEDButton::OSC_CHANGE);
+  enableSunButton       .attachOSC("/UseSun"    , LEDButton::OSC_CHANGE);
+  enablePlantButton     .attachOSC("/UsePlant"  , LEDButton::OSC_CHANGE);
+  buyElectricityButton  .attachOSC("/Buy"       , LEDButton::OSC_ON);
+  sellElectricityButton .attachOSC("/Sell"      , LEDButton::OSC_ON);
 }
 
 void setupVUMeter(){
@@ -554,22 +580,25 @@ void setup() {
     for(int i=0; i<NUM_NEOPIXEL_STRIPS; i++){
       strips[i]->begin();
       strips[i]->show();
-      strips[i]->setBrightness(50);
+      strips[i]->setBrightness(255);
     }
-    strip5.setBrightness(255);
-    strip6.setBrightness(255);
-    strip7.setBrightness(255);
     Serial.println("....done");
 
-    Serial.print("Test NeoPixel Strips - ColorWipe");
-    colorWipe(Adafruit_NeoPixel::Color(255,   0,   0)     , 2); // Red
-    // colorWipe(Adafruit_NeoPixel::Color(  0, 255,   0)     , 2); // Green
-    // colorWipe(Adafruit_NeoPixel::Color(  0,   0, 255)     , 2); // Blue
-    // colorWipe(Adafruit_NeoPixel::Color(255, 255, 255)     , 2); // White
-    // while(1) {}
-    colorWipe(Adafruit_NeoPixel::Color(  0,   0,   0)     , 2); // Black
-    Serial.println("....done");
+    if(false){
+      Serial.print("Test NeoPixel Strips - ColorWipe1");
+      colorWipe(0, Adafruit_NeoPixel::Color(255,   0,   0)     , 1); // Red
+      Serial.print("Test NeoPixel Strips - ColorWipe2");
+      colorWipe(1, Adafruit_NeoPixel::Color(255,   0,   0)     , 1); // Red
 
+
+      // colorWipe(Adafruit_NeoPixel::Color(255,   0,   0)     , 2); // Red
+      // colorWipe(Adafruit_NeoPixel::Color(  0, 255,   0)     , 2); // Green
+      // colorWipe(Adafruit_NeoPixel::Color(  0,   0, 255)     , 2); // Blue
+      // colorWipe(Adafruit_NeoPixel::Color(255, 255, 255)     , 2); // White
+      // while(1) {}
+      colorWipe(Adafruit_NeoPixel::Color(  0,   0,   0)     , 0); // Black
+      Serial.println("....done");
+    }
 
 
     // Init Ethernet
@@ -599,8 +628,6 @@ void setup() {
 }
 
 void reset(){
-  elActive   = true;
-  heatActive = true;
   for(int i=0; i<NUM_cityLights; i++) cityLights[i].init();
 
   // Reset Buttons
@@ -672,6 +699,7 @@ bool loopOsc(){
       msg.fill(Udp.read());
     }
     if(!msg.hasError()){
+      // LED Meters
       msg.dispatch("/OvenAmount" , [](OSCMessage& m){
         float v = m.getFloat(0);
         ovenPct.set_value(v);
@@ -710,7 +738,11 @@ bool loopOsc(){
 
       msg.dispatch("/Buy" , [](OSCMessage& m){
         float v = m.getFloat(0);
-        buySellElectricityMeter.set_value(v);
+        // Set Color
+        if(v > 0) buySellElectricityMeter.set_color(255, 0, 0); // Red for buying
+        else      buySellElectricityMeter.set_color(0, 255, 0); // Green for selling
+        // Set Value
+        buySellElectricityMeter.set_value(-v);
       });
 
       msg.dispatch("/CaCO3" , [](OSCMessage& m){
@@ -721,6 +753,22 @@ bool loopOsc(){
       msg.dispatch("/NaOH" , [](OSCMessage& m){
         float v = m.getFloat(0);
         dosing_meter2.set_value(v);
+      });
+
+      // VU Meters
+      msg.dispatch("/OvenTemp" , [](OSCMessage& m){
+        float v = m.getFloat(0);
+        ovenTempVU.setValue(v);
+      });
+
+      msg.dispatch("/Acid" , [](OSCMessage& m){
+        float v = m.getFloat(0);
+        acidEmissionsVU.setValue(v);
+      });
+
+      msg.dispatch("/CO" , [](OSCMessage& m){
+        float v = m.getFloat(0);
+        coEmissionsVU.setValue(v);
       });
 
       // msg.getAddress(str);
@@ -750,19 +798,24 @@ bool loopButtons(){
     if(buttonReadMillis > buttonReadInterval){
 
       // Update Buttons
-      startButton .bounce.update();
-      fillButton  .bounce.update();
+      startButton          .update();
+      fillButton           .update();
+      enableWindButton     .update();
+      enableSunButton      .update();
+      enablePlantButton    .update();
+      buyElectricityButton .update();
+      sellElectricityButton.update();
 
-
-      if(startButton.bounce.fallingEdge()){
+      if(startButton.pressed()){
           startButtonElapsed = 0;
           activity = true;
       }
-      else if(startButton.bounce.risingEdge()){
+      else if(startButton.released()){
           reset();
           sendAirSpeed();
           if(startButtonElapsed < 2000){
             sendCmd("StartButton");
+            startButton.setValue(true);
           }
           else {
             sendCmd("Reset");
@@ -770,13 +823,12 @@ bool loopButtons(){
           }
           activity = true;
       }
-      if(fillButton.bounce.fallingEdge()){
+      
+      if(fillButton.pressed()){
           sendCmd("FillButton");
           activity = true;
       }
 
-
-      cityStatusLoop();
 
       buttonReadMillis = 0;
     }
@@ -787,17 +839,21 @@ bool loopButtons(){
 bool loopLEDMeters()
 {
   bool activity = false;
-  ovenPct           .update();
-  airFlow          .update();
-  plantPower        .update();
-  turbinePct        .update();
-  heatPct           .update();
-  windPower    .update();
-  solarPower   .update();
-  plantElectricPower   .update();
+  ovenPct                .update();
+  airFlow                .update();
+  plantPower             .update();
+  turbinePct             .update();
+  heatPct                .update();
+  windPower              .update();
+  solarPower             .update();
+  plantElectricPower     .update();
   buySellElectricityMeter.update();
   dosing_meter1          .update();
   dosing_meter2          .update();
+
+  strip1.show();
+  strip2.show();
+  return activity;
 }
 
 
@@ -842,6 +898,7 @@ bool loopAnalog(){
     return activity;
 }
 
+/*
 void ovenPixelLoop(){
   for(int i=0; i<26; i++){
     if(i < amountInOven){
@@ -869,8 +926,9 @@ void ovenPixelLoop(){
   fillButton .setLED(amountInStorage);
   startButton.setLED(gameRunning);
 }
+*/
 
-
+/*
 void heatPixelLoop(){
   static unsigned long counter = 0;
   float h = heatFilter.value;
@@ -891,53 +949,14 @@ void heatPixelLoop(){
   counter++;
   strip6.show();  
 }
-
+*/
 
 void pixelLoop(){
   if(pixelUpdateMillis > pixelUpdateInterval){
-    setBarLed(sol_strip ,sol_pixelOffset ,sol_numPixels ,sol/sol_max  ,255,100,0,false);
-    setBarLed(bio_strip ,bio_pixelOffset ,bio_numPixels ,bio  ,0,255,0,true);
-    setBarLed(strip2, 26, 26, oscAirSpeed, 0  , 100, 255, false);
-    setBarLed(strip2, 52, 26, bio, 200,  55,   0, false );
-    ovenPixelLoop();
-    heatPixelLoop();
-    
-    pixelUpdateMillis = 0;
+    loopLEDMeters();
   }
 }
 
-void cityStatusLoop(){
-    bool productionOk = productionPercent >= 1.0f;
-    elAmount   = elActive   && productionPercent > 0.70f ? 1.0f : 0.0f;
-    heatAmount = heatActive && productionPercent > 0.95f ? 1.0f : 0.0f;
-
-    heatFilter.process(heatAmount);
-    elFilter  .process(elAmount);
-
-    city_missing_heat        = heatFilter.getValue() < 0.9;
-    city_missing_electricity = elFilter  .getValue() < 0.01;
-
-    city_power_status_strip.setPixelColor(0, city_missing_heat        ? 255 : 0, 0, 0);
-    city_power_status_strip.setPixelColor(1, city_missing_electricity ? 255 : 0, 0, 0);
-    city_power_status_strip.show();
-}
-
-void cityLightsLoop(){
-  if(cityLightMillis > cityLightInterval){
-
-    for(int i=0; i<NUM_cityLights; i++){
-      auto& x = cityLights[i];
-      if(x.update(g_time) && i < elFilter.value*NUM_cityLights){
-        analogWrite(x.pin, x.pwm * elFilter.value);
-      }
-      else {
-        analogWrite(x.pin, 0);
-      }
-    }
-
-    cityLightMillis = 0;
-  }
-}
 
 void loop(){
   current_millis = millis();    
@@ -948,12 +967,7 @@ void loop(){
 
   if(!oscActivity){
     pixelLoop();
-    cityLightsLoop();
-
-
   }
-
-
 
   // blink the LED when any activity has happened
   if(activity){
@@ -965,18 +979,3 @@ void loop(){
   }
 
 }
-
-void setBarLed(Adafruit_NeoPixel& strip, int offset, int numPixels, float value, uint8_t r, uint8_t g, uint8_t b, bool show){
-  float numOn = numPixels * value;
-  int numFullOn = static_cast<int>(numOn);
-  float scale = numOn-numFullOn;
-
-  for(int i=0; i<numPixels; i++) { 
-    if(i < numFullOn) strip.setPixelColor(offset+i, Adafruit_NeoPixel::Color(r,g,b));         
-    else if (i < ceil(numOn)) strip.setPixelColor(offset+i, Adafruit_NeoPixel::Color(r*scale,g*scale,b*scale));         
-    else strip.setPixelColor(offset+i,0);   
-  }
-  if(show) strip.show();                          
-}
-
-  
