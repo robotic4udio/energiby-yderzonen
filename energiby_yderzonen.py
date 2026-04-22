@@ -131,7 +131,7 @@ rendering_queue = {'x': [], 'y': [], 'v': []}
 # Thread pool for parallel calculations
 executor = ThreadPoolExecutor(max_workers=3)
 
-oscSenderTeensy = udp_client.SimpleUDPClient("127.0.0.1",7134)
+oscSenderControlPanel = udp_client.SimpleUDPClient("192.168.0.105",7134)
 oscSenderOvenDisplay = udp_client.SimpleUDPClient("192.168.0.101",7134)
 oscSenderStorageDisplay = udp_client.SimpleUDPClient("192.168.0.104",7134)
 
@@ -811,22 +811,22 @@ fig2 = create_plot_on_monitor(monitors[1 if FullScreen else 0], plot_heat)  # As
 plt.tight_layout()
 
 def sendElData():
-    oscSenderTeensy.send_message("/OvenAmount", energy_grid.powerplant.oven_amount/energy_grid.powerplant.oven_amount_max)
-    oscSenderTeensy.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
-    oscSenderTeensy.send_message("/PlantPower", energy_grid.powerplant.get_total_power_pct())
-    oscSenderTeensy.send_message("/WindPower", energy_grid.wind_generator.get_available_power(index)/energy_grid.wind_generator.max)
-    oscSenderTeensy.send_message("/SolarPower", energy_grid.sun_generator.get_available_power(index)/energy_grid.sun_generator.max)
-    oscSenderTeensy.send_message("/Acid", energy_grid.powerplant.get_acid_emission())
-    oscSenderTeensy.send_message("/CO", energy_grid.powerplant.get_CO_emission())
-    oscSenderTeensy.send_message("/ElectricityPct", energy_grid.powerplant.get_electricity_pct())
-    oscSenderTeensy.send_message("/HeatPct", energy_grid.powerplant.get_heat_pct())
-    oscSenderTeensy.send_message("/PlantElectricPower", energy_grid.powerplant.get_electric_power_pct())
-    oscSenderTeensy.send_message("/OvenTemp", energy_grid.powerplant.get_oven_temperature_pct())
-    oscSenderTeensy.send_message("/CaCO3", energy_grid.powerplant.CaCO3_amount)
-    oscSenderTeensy.send_message("/NaOH", energy_grid.powerplant.NaOH_amount)
-    oscSenderTeensy.send_message("/TurbinePct", energy_grid.powerplant.turbine_pct)
-    oscSenderTeensy.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
-    oscSenderTeensy.send_message("/Buy", energy_grid.electric_market.get()/energy_grid.electric_market.batch)
+    oscSenderControlPanel.send_message("/OvenAmount", energy_grid.powerplant.oven_amount/energy_grid.powerplant.oven_amount_max)
+    oscSenderControlPanel.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
+    oscSenderControlPanel.send_message("/PlantPower", energy_grid.powerplant.get_total_power_pct())
+    oscSenderControlPanel.send_message("/WindPower", energy_grid.wind_generator.get_available_power(index)/energy_grid.wind_generator.max)
+    oscSenderControlPanel.send_message("/SolarPower", energy_grid.sun_generator.get_available_power(index)/energy_grid.sun_generator.max)
+    oscSenderControlPanel.send_message("/Acid", energy_grid.powerplant.get_acid_emission())
+    oscSenderControlPanel.send_message("/CO", energy_grid.powerplant.get_CO_emission())
+    oscSenderControlPanel.send_message("/ElectricityPct", energy_grid.powerplant.get_electricity_pct())
+    oscSenderControlPanel.send_message("/HeatPct", energy_grid.powerplant.get_heat_pct())
+    oscSenderControlPanel.send_message("/PlantElectricPower", energy_grid.powerplant.get_electric_power_pct())
+    oscSenderControlPanel.send_message("/OvenTemp", energy_grid.powerplant.get_oven_temperature_pct())
+    oscSenderControlPanel.send_message("/CaCO3", energy_grid.powerplant.CaCO3_amount)
+    oscSenderControlPanel.send_message("/NaOH", energy_grid.powerplant.NaOH_amount)
+    oscSenderControlPanel.send_message("/TurbinePct", energy_grid.powerplant.turbine_pct)
+    oscSenderControlPanel.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
+    oscSenderControlPanel.send_message("/Buy", energy_grid.electric_market.get()/energy_grid.electric_market.max)
     oscSenderOvenDisplay.send_message("/OvenIntensity", energy_grid.powerplant.get_oven_temperature_pct())
     oscSenderStorageDisplay.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
 
@@ -861,6 +861,7 @@ def clear():
 
     updatePlot()
     updateHeatPlot()
+    
 
 
 
