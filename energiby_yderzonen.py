@@ -151,18 +151,18 @@ class EnergyRequirement:
     runtime.
     """
 
-    def __init__(self, mw_needed, N=961, offset=0.0, uncertainty=7.0, alpha=0.02):
+    def __init__(self, mw_needed, N=961, mul=1, offset=0.0, uncertainty=7.0, alpha=0.02):
         self.hours_vector = np.linspace(0, 48, 49, True)
         self.N = N
-        self.set_mw_needed(mw_needed, offset, uncertainty, alpha)
+        self.set_mw_needed(mw_needed, mul, offset, uncertainty, alpha)
 
-    def set_mw_needed(self, mw_needed, offset=0.0, uncertainty=7.0, alpha=0.02):
+    def set_mw_needed(self, mw_needed, mul=1.0, offset=0.0, uncertainty=7.0, alpha=0.02):
         """Assign a new hourly demand pattern and recompute all curves."""
         self.offset = offset
-        self.uncertainty = uncertainty
+        self.uncertainty = uncertainty * mul
         self.alpha = alpha
 
-        self.mw_needed = np.array(mw_needed) + offset
+        self.mw_needed = np.array(mw_needed) * mul + offset
         self.time_vector = np.zeros(self.N)
         self.need_vector = np.full(self.N, self.mw_needed.mean())
         self.need_min_vector = np.zeros(self.N)
@@ -194,8 +194,8 @@ N = 961
 class EnergyRequirements:
     def __init__(self):
         # Set default curves for both electricity and heat; they can be changed independently at runtime using the set_mw_needed method
-        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset= 3.0)
-        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-8.0)
+        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset= 3.0, mul=10.0)
+        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-8.0, mul=10.0)
 
     def get_total_need_vector(self):
         return self.electricity.need_vector + self.heat.need_vector
@@ -226,10 +226,10 @@ td = 0 # Time of day in hours (0-24)
 # ------------------------------------------------------------------------------------------- #
 class WindGenerator:
     def __init__(self):
-        self.max = 35.0  # Max Wind Power in MW
+        self.max = 350.0  # Max Wind Power in MW
         self.n = 0
         self.N = 15
-        self.mean = 10.0
+        self.mean = 100.0
         self.sd = 15.0
         self.f1 = OnePole(0.05, self.mean)
         self.f2 = OnePole(0.005, self.mean)
@@ -283,7 +283,7 @@ class WindGenerator:
 class SunGenerator:
     def __init__(self):
         # use the current average electricity demand for scaling
-        self.max = 0.07 * 35 # Max Solar Power in MW, scaled to be a fraction of the average electricity demand
+        self.max = 200 # Max Solar Power in MW, scaled to be a fraction of the average electricity demand
         self.f1 = OnePole(0.1, 0.0)
         self.f2 = OnePole(0.1, self.f1.get())
         self.power = 0.0
@@ -335,8 +335,8 @@ class SunGenerator:
 class BurnableWaste:
     amount: float = 0.0
     energy_density: float = 1.0
-    acid_amount: float = 0.2
-    co_amount: float = 0.2
+    acid_amount: float = 0.5
+    co_amount: float = 0.5
     moisture_content: float = 0.15
 
     def copy_with_amount(self, amount):
@@ -357,11 +357,11 @@ class BurnableWasteStorage:
     # Preset profiles for common waste streams delivered to the plant.
     # Keys are both the integer index and the lowercase name (resolved in _waste_from_type).
     WASTE_TYPES = {
-        0: dict(name="household",  energy_density=0.85, acid_amount=0.25, co_amount=0.28, moisture_content=0.22),
-        1: dict(name="paper",      energy_density=0.90, acid_amount=0.10, co_amount=0.15, moisture_content=0.08),
-        2: dict(name="plastic",    energy_density=1.40, acid_amount=0.45, co_amount=0.70, moisture_content=0.02),
-        3: dict(name="wood",       energy_density=1.05, acid_amount=0.08, co_amount=0.20, moisture_content=0.25),
-        4: dict(name="industrial", energy_density=1.20, acid_amount=0.75, co_amount=0.45, moisture_content=0.05),
+        0: dict(name="household",  energy_density=0.85, acid_amount=0.90, co_amount=0.88, moisture_content=0.22),
+        1: dict(name="paper",      energy_density=0.90, acid_amount=0.60, co_amount=0.75, moisture_content=0.08),
+        2: dict(name="plastic",    energy_density=1.40, acid_amount=1.10, co_amount=2.10, moisture_content=0.02),
+        3: dict(name="wood",       energy_density=1.05, acid_amount=0.70, co_amount=0.90, moisture_content=0.25),
+        4: dict(name="industrial", energy_density=1.20, acid_amount=1.80, co_amount=1.60, moisture_content=0.05),
     }
     _WASTE_TYPE_BY_NAME = {v["name"]: k for k, v in WASTE_TYPES.items()}
 
@@ -475,29 +475,29 @@ class PowerPlant:
         # Ref to requirements for scaling power output and emissions
         self.requirements = requirements
         # Parameters related to the storage of burnable waste
-        self.storage_amount_max = 128.0
+        self.storage_amount_max = 140.0
         self.storage = BurnableWasteStorage(self.storage_amount_max)
        
         # oven state
-        self.oven_amount_initial = 26.0
+        self.oven_amount_initial = 15.0
         self.oven_amount = self.oven_amount_initial
         self.oven_waste = BurnableWaste(
             amount=self.oven_amount_initial,
             energy_density=1.0,
-            acid_amount=0.22,
-            co_amount=0.25,
+            acid_amount=0.8,
+            co_amount=0.7,
             moisture_content=0.16,
         )
-        self.oven_amount_max = 36.0
+        self.oven_amount_max = 30.0
         self.oven_amount_ok_min = 16.0
         self.oven_amount_ok_max = 25.0
-        self.oven_amount_to_fill = 9.0
-        self.oven_consumption_rate = 0.4
+        self.oven_amount_to_fill = 3.0
+        self.oven_consumption_rate = 0.08
         # Air flow state
         self.air_flow = 0.5
 
         # power generation state
-        self.power_max = 80  # MW
+        self.power_max = 600  # MW
         self.calorific_scaling = 2.0
         self.alpha_up = 0.008
         self.alpha_down = 0.008
@@ -619,6 +619,10 @@ class PowerPlant:
     def calculate_acid_emission(self):
         # Waste chemistry drives baseline emissions; additives reduce them.
         acid_emission = self.get_total_power_pct() * (self.oven_waste.acid_amount - self.CaCO3_amount)
+        if acid_emission < 0: 
+            acid_emission = 0
+        elif acid_emission > 1:
+            acid_emission = 1            
         return self.acid_emission.update(acid_emission)
         
     def calculate_CO_emission(self):
@@ -626,6 +630,10 @@ class PowerPlant:
         if self.get_lambda() < 1.0:
             lambda_scaling = 1.0 + 2.0 * (1.0 - self.get_lambda())  # Sharp increase as lambda drops below 1
         CO_emission = self.get_total_power_pct() * (self.oven_waste.co_amount - self.NaOH_amount) * lambda_scaling
+        if CO_emission < 0: 
+            CO_emission = 0
+        elif CO_emission > 1:
+            CO_emission = 1
         return self.CO_emission.update(CO_emission)
 
     def calculate_power(self):
@@ -662,7 +670,9 @@ class PowerPlant:
         # --- Burn rate: waste consumed per time-step ---
         # Driven by oxygen supply (air_flow) and combustion surface area (oven_pct),
         # strongly dampened by moisture.
-        burn_rate = airflow_squared * oven_pct_squared * moisture_factor * self.oven_consumption_rate
+                
+        burn_rate = (1+airflow_squared) * (1+oven_pct_squared) * moisture_factor * self.oven_consumption_rate
+        
         self.oven_amount = max(self.oven_amount - burn_rate, 0.0)
         self.oven_waste.amount = self.oven_amount
 
@@ -700,8 +710,8 @@ class PowerPlant:
 class ElectricMarket:
     def __init__(self):
         self.reset()
-        self.max = 20.0  # Max amount of MW that can be bought or sold
-        self.batch = 5.0  # Amount of MW to buy/sell in one transaction
+        self.max = 200.0  # Max amount of MW that can be bought or sold
+        self.batch = 40.0  # Amount of MW to buy/sell in one transaction
 
     def set(self, amount):
         self.amount = amount
@@ -762,7 +772,7 @@ def plot_electricity(fig):
     global lb,lheat,ls,lel
     ax = fig.gca()  # Get the current axes
     ax.set_xlim([0,48]) # Set the x-limits
-    ax.set_ylim([0,70]) # Set the y-limits
+    ax.set_ylim([0,600]) # Set the y-limits
     ax.set_xlabel('Time [h]')
     ax.set_ylabel('Power [MW]')
     ax.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
@@ -785,7 +795,7 @@ def plot_heat(fig):
     global lheat
     ax = fig.gca()  # Get the current axes
     ax.set_xlim([0,48]) # Set the x-limits
-    ax.set_ylim([0,70]) # Set the y-limits
+    ax.set_ylim([0,600]) # Set the y-limits
     ax.set_xlabel('Time [h]')
     ax.set_ylabel('Power [MW]')
     ax.set_xticks([0  ,6  ,12  ,18  ,24 ,30 ,36  ,42  ,48])
@@ -849,6 +859,7 @@ def clear():
     global x_values, el_plot_values, b_values, heat_plot_values, s_values, index, run, t, td
     global production_filter
 
+    run = 0
     x_values = []
     el_plot_values = []
     heat_plot_values = []
@@ -858,12 +869,16 @@ def clear():
     index = 0
     t = 0
     td = 0
-
+    
     updatePlot()
     updateHeatPlot()
     
-
-
+def start(value):
+    global run
+    if value:
+        run = 1
+    else:
+        run = 0
 
 # Frame counter for batching updates
 render_frame_counter = 0
@@ -906,30 +921,6 @@ def animateHeat(i):
 # --------------------------------------------------------------
 # ------------------------- OSC --------------------------------
 # --------------------------------------------------------------
-# Function to recieve value over osc 
-def oscValue(addr, value):
-    energy_grid.powerplant.set_air_flow(value)
-    print("[{0}] ~ {1}".format(addr, energy_grid.powerplant.air_flow))
-
-def oscCmd(addr, value):
-    global x_values, el_plot_values, index, run
-    if value == 'clear':
-        clear()
-    elif value == 'run':
-        run = 1
-    elif value == 'stop':
-        run = 0
-    elif value == 'StartButton':
-        clear()
-        run = not run
-    elif value == 'FillButton':
-        energy_grid.powerplant.fill_oven()
-    elif value == 'Reset':
-        run = 0
-        clear()
-        
-    print("[{0}] ~ {1}".format(addr, value))
-
 def oscAmountInOven(addr, value):
     energy_grid.powerplant.oven_amount = value
     print("[{0}] ~ {1}".format(addr, energy_grid.powerplant.oven_amount))
@@ -940,18 +931,19 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--ip", default="0.0.0.0", help="The ip to listen on")
 parser.add_argument("--port", type=int, default=7133, help="The port to listen on")
 args = parser.parse_args()
-dispatcher.map("/OvenAirFlow", oscValue)
-dispatcher.map("/cmd", oscCmd)
-dispatcher.map("/AmountInOven", oscAmountInOven)
+dispatcher.map("/OvenAirFlow", lambda addr, value: energy_grid.powerplant.set_air_flow(value))
+dispatcher.map("/Start",  lambda addr, value: start(value))
+dispatcher.map("/Reset", lambda addr, value: clear())
+# dispatcher.map("/AmountInOven", oscAmountInOven)
 dispatcher.map("/UseWind", lambda addr, value: energy_grid.wind_generator.activate(value))
 dispatcher.map("/UseSun", lambda addr, value: energy_grid.sun_generator.activate(value))
 dispatcher.map("/UsePlant", lambda addr, value: energy_grid.powerplant.activate(value))
 dispatcher.map("/FillOven", lambda addr, value: energy_grid.powerplant.fill_oven())
 dispatcher.map("/CaCO3", lambda addr, value: energy_grid.powerplant.set_CaCO3_amount(value))
 dispatcher.map("/NaOH", lambda addr, value: energy_grid.powerplant.set_NaOH_amount(value))
-dispatcher.map("/TurbinePct", lambda addr, value: energy_grid.powerplant.set_turbine_pct(value))
-dispatcher.map("/BuyBu", lambda addr: energy_grid.electric_market.buy())
-dispatcher.map("/SellBu", lambda addr: energy_grid.electric_market.sell())
+dispatcher.map("/EnergyDist", lambda addr, value: energy_grid.powerplant.set_turbine_pct(value))
+dispatcher.map("/Buy", lambda addr, value: energy_grid.electric_market.buy())
+dispatcher.map("/Sell", lambda addr, value: energy_grid.electric_market.sell())
 
 # Print all incoming messages
 def print_handler(address, *args):
