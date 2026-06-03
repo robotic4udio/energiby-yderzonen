@@ -10,47 +10,36 @@
 
 // Push Button Pins
 #define BU1_START_PIN 26
-#define BU2_FILL_OVEN_PIN 27
-#define BU3_ENABLE_WIND_PIN 28
-#define BU4_ENABLE_SUN_PIN 29
-#define BU5_ENABLE_PLANT_PIN 30
-#define BU6_BUY_ELECTRICITY_PIN 31
-#define BU7_SELL_ELECTRICITY_PIN 32
-#define BU8_SPARE_PIN 33
+#define BU2_RESET_PIN 27
+#define BU3_FILL_OVEN_PIN 28
+#define BU4_ENABLE_WIND_PIN 29
+#define BU5_ENABLE_SUN_PIN 30
+#define BU6_ENABLE_PLANT_PIN 31
+#define BU7_BUY_ELECTRICITY_PIN 32
+#define BU8_SELL_ELECTRICITY_PIN 33
 
 // Potentiometer Pins
 #define POT1_AIR_SPEED_PIN 14    // A0
 #define POT2_ENERGY_DIST_PIN 15  // A1
 #define POT3_CaCO3_DOSING_PIN 16 // A2
 #define POT4_NaOH_DOSING_PIN 17  // A3
-#define POT1_VCC_PIN 18 // A4 : 3.3V -- remember to connect GND
-#define POT2_VCC_PIN 19 // A5 : 3.3V -- remember to connect GND
-#define POT3_VCC_PIN 20 // A6 : 3.3V -- remember to connect GND
-#define POT4_VCC_PIN 21 // A7 : 3.3V -- remember to connect GND
 
 // LED Pins
 #define LED1_START_BUTTON_PIN 0
-#define LED2_FILL_OVEN_PIN 1
-#define LED3_ENABLE_WIND_PIN 2
-#define LED4_ENABLE_SUN_PIN 3
-#define LED5_ENABLE_PLANT_PIN 4
-#define LED6_BUY_ELECTRICITY_PIN 5
-#define LED7_SELL_ELECTRICITY_PIN 6
-#define LED8_OVEN_TEMPERATURE_ALARM_PIN 7
-#define LED9_ACID_EMISSIONS_ALARM_PIN 8
-#define LED10_CO_EMISSIONS_ALARM_PIN 9
-#define LED11_SPARE_PIN 10
-#define LED12_SPARE_PIN 11
+#define LED2_RESET_BUTTON_PIN 1
+#define LED3_FILL_OVEN_PIN 2
+#define LED4_ENABLE_WIND_PIN 3
+#define LED5_ENABLE_SUN_PIN 4
+#define LED6_ENABLE_PLANT_PIN 5
+#define LED7_BUY_ELECTRICITY_PIN 6
+#define LED8_SELL_ELECTRICITY_PIN 7
+#define LED9_OVEN_TEMPERATURE_ALARM_PIN 25
+#define LED10_ACID_EMISSIONS_ALARM_PIN 12
+#define LED11_CO_EMISSIONS_ALARM_PIN 13
 
 // LED Strip Pins
 #define STRIP1_PIN 34
 #define STRIP2_PIN 35
-#define STRIP3_PIN 36
-#define STRIP4_PIN 37
-#define STRIP5_PIN 38
-#define STRIP6_PIN 39
-#define STRIP7_PIN 40
-#define STRIP8_PIN 41
 
 // MOSFET Pins
 #define VU_METER_OVEN_TEMP_PIN 22
@@ -61,31 +50,26 @@
 elapsedMillis ledOnMillis;
 
 // NeoPixel Led Strips
-#define NUM_NEOPIXEL_STRIPS 4
-Adafruit_NeoPixel strip1(145, STRIP1_PIN, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel strip2(145, STRIP2_PIN, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel strip3(145, STRIP3_PIN, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel strip4(145, STRIP4_PIN, NEO_GRB + NEO_KHZ800);
+#define NUM_NEOPIXEL_STRIPS 2
+Adafruit_NeoPixel strip1(30 , STRIP1_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip2(154, STRIP2_PIN, NEO_GRB + NEO_KHZ800);
 
-Adafruit_NeoPixel* strips[NUM_NEOPIXEL_STRIPS] = {&strip1, &strip2, &strip3, &strip4};
+Adafruit_NeoPixel* strips[NUM_NEOPIXEL_STRIPS] = {&strip1, &strip2};
 
 elapsedMillis pixelUpdateMillis;
-unsigned long pixelUpdateInterval = 39;
+unsigned long pixelUpdateInterval = 100;
 
-#define PULSELEN 30
-int pulse_vec[PULSELEN] = {15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 30, 45, 80, 115, 150, 185, 220, 255};
+#define PULSELEN 60
+uint8_t pulse_l = 45;
+int pulse_vec[PULSELEN] = {
+  pulse_l , pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l , 
+  pulse_l , pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l, pulse_l , 
+  45      , 50     , 55     , 60     , 65     , 70     , 75     , 80      ,85     , 90      ,
+  95      , 100    , 105    , 110    , 115    , 120    , 125    , 130     ,140    , 150     ,
+  160     , 170    , 180    , 190    , 200    , 205    , 210    , 215     ,220    , 225     ,
+  230     , 235    , 240    , 245    , 250    , 255    , 255    , 255     ,255    , 255               
+};
 
-
-bool gameRunning = false;
-
-/*
-// Ovn
-int amountInOven = 0;
-int amountInOven_ok_min = 8;
-int amountInOven_ok_max = 18;
-int amountInOven_max = 26;
-int amountInStorage = 64;
-*/
 
 //Time 
 float g_time = 11.0f;
@@ -160,7 +144,7 @@ unsigned long buttonReadInterval = 5;
 
 
 struct LEDButton {
-  enum ButtonMode {MANUAL, PUSHBUTTON, TOGGLE};
+  enum ButtonMode {MANUAL, PUSHBUTTON, TOGGLE, PUSHBUTTON_LED_ON};
   enum OSCMode {OSC_NONE, OSC_OFF, OSC_ON, OSC_CHANGE};
 
   LEDButton(const int sw_pin, const int led_pin, bool a_value=false, ButtonMode a_mode=MANUAL, const int debounceTime=20)
@@ -191,6 +175,11 @@ struct LEDButton {
         break;
       case TOGGLE:
         if(pressed()) toggle(true);
+        break;
+      case PUSHBUTTON_LED_ON:
+        if(pressed())       setValue(true , false);
+        else if(released()) setValue(false, false);
+        setLED(true);
         break;
     }
 
@@ -361,6 +350,20 @@ struct LEDMeter {
 
 };
 
+struct LED {
+  LED(uint8_t a_pin):m_pin(a_pin){}
+
+  void setup(){
+    pinMode(m_pin, OUTPUT);
+  }
+
+  void set_value(bool value){
+    digitalWrite(m_pin, value);
+  }
+
+  uint8_t m_pin;
+};
+
 struct VU_Meter {
   VU_Meter(int pin, float min_value=0, float max_value=1)
     :m_pin(pin)
@@ -378,6 +381,10 @@ struct VU_Meter {
     float pct = (m_value - m_min_value) / (m_max_value - m_min_value);
     int pwm = static_cast<int>(pct * 255);
     analogWrite(m_pin, pwm);
+  }
+
+  float getValue(){
+    return m_value;
   }
 
   int m_pin;
@@ -402,6 +409,13 @@ struct Pot {
       changed = true;    
       m_value = value;
     }
+    // OSC Message
+    if(changed && oscAttached){
+      oscMsg.empty();
+      oscMsg.add(m_value);
+      sendOsc(oscMsg, PiIp, PiPort);
+    }
+
     return changed;
   }
 
@@ -409,42 +423,58 @@ struct Pot {
     return m_value;
   }
 
+  void attachOSC(const char* address){
+    oscMsg.setAddress(address);
+    oscAttached = true;
+  }
+
   int m_pin;
   float m_min_value = 0;
   float m_max_value = 1;
   float m_value = 0;
   float m_threshold = 0.01;
+
+
+  OSCMessage oscMsg;
+  bool oscAttached = false;
+
 };
 
 
 
 
 // Create LED Button Objects.   (pin                      , led_pin                   , initial_value , ButtonMode , debounceTime)
-LEDButton startButton           (BU1_START_PIN            , LED1_START_BUTTON_PIN     , false         , LEDButton::MANUAL     , 20);
-LEDButton fillButton            (BU2_FILL_OVEN_PIN        , LED2_FILL_OVEN_PIN        , false         , LEDButton::PUSHBUTTON , 20);
-LEDButton enableWindButton      (BU3_ENABLE_WIND_PIN      , LED3_ENABLE_WIND_PIN      , true          , LEDButton::TOGGLE     , 20);
-LEDButton enableSunButton       (BU4_ENABLE_SUN_PIN       , LED4_ENABLE_SUN_PIN       , true          , LEDButton::TOGGLE     , 20);
-LEDButton enablePlantButton     (BU5_ENABLE_PLANT_PIN     , LED5_ENABLE_PLANT_PIN     , true          , LEDButton::TOGGLE     , 20);
-LEDButton buyElectricityButton  (BU6_BUY_ELECTRICITY_PIN  , LED6_BUY_ELECTRICITY_PIN  , false         , LEDButton::PUSHBUTTON , 20);
-LEDButton sellElectricityButton (BU7_SELL_ELECTRICITY_PIN , LED7_SELL_ELECTRICITY_PIN , false         , LEDButton::PUSHBUTTON , 20);
+LEDButton startButton           (BU1_START_PIN            , LED1_START_BUTTON_PIN     , false        , LEDButton::TOGGLE            , 20);
+LEDButton resetButton           (BU2_RESET_PIN            , LED2_RESET_BUTTON_PIN     , false        , LEDButton::PUSHBUTTON        , 20);
+LEDButton fillButton            (BU3_FILL_OVEN_PIN        , LED3_FILL_OVEN_PIN        , false        , LEDButton::PUSHBUTTON_LED_ON , 20);
+LEDButton enableWindButton      (BU4_ENABLE_WIND_PIN      , LED4_ENABLE_WIND_PIN      , true         , LEDButton::TOGGLE            , 20);
+LEDButton enableSunButton       (BU5_ENABLE_SUN_PIN       , LED5_ENABLE_SUN_PIN       , true         , LEDButton::TOGGLE            , 20);
+LEDButton enablePlantButton     (BU6_ENABLE_PLANT_PIN     , LED6_ENABLE_PLANT_PIN     , true         , LEDButton::TOGGLE            , 20);
+LEDButton buyElectricityButton  (BU7_BUY_ELECTRICITY_PIN  , LED7_BUY_ELECTRICITY_PIN  , false        , LEDButton::PUSHBUTTON_LED_ON , 20);
+LEDButton sellElectricityButton (BU8_SELL_ELECTRICITY_PIN , LED8_SELL_ELECTRICITY_PIN , false        , LEDButton::PUSHBUTTON_LED_ON , 20);
 
 // Create LED Meter Objects
-LEDMeter ovenPct                 (strip1 , 0  , 20 , 0 , 1, 255, 0, 100);
-LEDMeter airFlow                 (strip1 , 20 , 20 , 0 , 1, 0, 100, 255);
-LEDMeter plantPower              (strip1 , 40 , 20 , 0 , 1, 255, 100, 0);
-LEDMeter turbinePct              (strip1 , 60 , 20 , 0 , 1, 255, 50, 50);
-LEDMeter heatPct                 (strip1 , 80 , 20 , 0 , 1, 0, 255, 100);
-LEDMeter windPower               (strip2 , 0  , 26 , 0 , 1, 0, 100, 255);
-LEDMeter solarPower              (strip2 , 26 , 26 , 0 , 1, 255, 255, 0);
-LEDMeter plantElectricPower      (strip2 , 52 , 26 , 0 , 1, 255, 255, 255);
-LEDMeter buySellElectricityMeter (strip2 , 78 , 8  ,-1 , 1, 0 , 255, 0);
-LEDMeter dosing_meter1           (strip2 , 86 , 20 , 0 , 1, 100, 100, 100);
-LEDMeter dosing_meter2           (strip2 , 106 , 20 , 0, 1, 0, 50, 200);
+LEDMeter ovenPct                 (strip1 , 0  , 10 , 0 , 1, 255, 0, 100);   // Strip 1: Pixels 0-9
+LEDMeter airFlow                 (strip1 , 10 , 10 , 0 , 1, 255, 255, 255);   // Strip 1: Pixels 10-19
+LEDMeter plantPower              (strip1 , 20 , 10 , 0 , 1, 255, 100, 0);   // Strip 1: Pixels 20-29
+LEDMeter turbinePct              (strip2 , 0  , 37 , 0 , 1, 255, 50, 50);   // Strip 2: Pixels 0-36 (37 pixels)
+LEDMeter heatPct                 (strip2 , 37 , 37 , 0 , 1, 0, 255, 100);   // Strip 1: Pixels 37-73 (37 pixels)
+LEDMeter windPower               (strip2 , 74 , 10 , 0 , 1, 0, 100, 255);   // Strip 2: Pixels 74-83 (10 pixels)
+LEDMeter solarPower              (strip2 , 84 , 10 , 0 , 1, 255, 150, 0);   // Strip 2: Pixels 84-93 (10 pixels)
+LEDMeter plantElectricPower      (strip2 , 94 , 10 , 0 , 1, 255, 50, 0); // Strip 2: Pixels 94-103 (10 pixels)
+LEDMeter buySellElectricityMeter (strip2 , 104 , 10  ,-1 , 1, 0 , 255, 0);  // Strip 2: Pixels 104-113 (10 pixels, green for selling, red for buying)
+LEDMeter dosing_meter1           (strip2 , 114 , 20 , 0 , 1, 100, 100, 100);// Strip 2: Pixels 114-133 (20 pixels)
+LEDMeter dosing_meter2           (strip2 , 134 , 20 , 0, 1, 0, 50, 200);    // Strip 2: Pixels 134-153 (20 pixels)
 
 // Create VU Meter Objects
 VU_Meter ovenTempVU      (VU_METER_OVEN_TEMP_PIN      , 0 , 1);
 VU_Meter acidEmissionsVU (VU_METER_ACID_EMISSIONS_PIN , 0 , 1);
 VU_Meter coEmissionsVU   (VU_METER_CO_EMISSIONS_PIN   , 0 , 1);
+
+// Create LED Objects
+LED ovenTempAlarmLED     (LED9_OVEN_TEMPERATURE_ALARM_PIN);
+LED acidEmissionsAlarmLED(LED10_ACID_EMISSIONS_ALARM_PIN);
+LED coEmissionsAlarmLED  (LED11_CO_EMISSIONS_ALARM_PIN);
 
 // Create Potentiometer Objects
 Pot airSpeedPot    (POT1_AIR_SPEED_PIN    , 0 , 1);
@@ -455,6 +485,7 @@ Pot NaOHDosingPot  (POT4_NaOH_DOSING_PIN  , 0 , 1);
 
 void setupButtons(){
   startButton           .setup();
+  resetButton           .setup();
   fillButton            .setup();
   enableWindButton      .setup();
   enableSunButton       .setup();
@@ -463,6 +494,8 @@ void setupButtons(){
   sellElectricityButton .setup();
 
   // Attach OSC messages to buttons
+  startButton           .attachOSC("/Start"     , LEDButton::OSC_CHANGE);
+  resetButton           .attachOSC("/Reset"     , LEDButton::OSC_ON);
   fillButton            .attachOSC("/FillOven"  , LEDButton::OSC_ON);
   enableWindButton      .attachOSC("/UseWind"   , LEDButton::OSC_CHANGE);
   enableSunButton       .attachOSC("/UseSun"    , LEDButton::OSC_CHANGE);
@@ -477,24 +510,23 @@ void setupVUMeter(){
     coEmissionsVU   .setup();
 }
 
+void setupLEDs(){
+  ovenTempAlarmLED     .setup();
+  acidEmissionsAlarmLED.setup();
+  coEmissionsAlarmLED  .setup();
+}
+
 void setupPots(){
-  // Power the pots with 3.3V from the Teensy, remember to connect GND as well
-  // I do this because I forgot to break 3.3V out on the circuit board and I don't want to redesign the PCB
-  pinMode(POT1_VCC_PIN, OUTPUT);
-  pinMode(POT2_VCC_PIN, OUTPUT);
-  pinMode(POT3_VCC_PIN, OUTPUT);
-  pinMode(POT4_VCC_PIN, OUTPUT);
-
-  digitalWrite(POT1_VCC_PIN, HIGH);
-  digitalWrite(POT2_VCC_PIN, HIGH);
-  digitalWrite(POT3_VCC_PIN, HIGH);
-  digitalWrite(POT4_VCC_PIN, HIGH);
-
-  // Setup the pot pins as input and read initial value
   airSpeedPot    .setup();
   energyDistPot  .setup();
   CaCO3DosingPot .setup();
   NaOHDosingPot  .setup();
+
+  // Attach OSC messages to pots
+  airSpeedPot    .attachOSC("/OvenAirFlow");
+  energyDistPot  .attachOSC("/EnergyDist");
+  CaCO3DosingPot .attachOSC("/CaCO3");
+  NaOHDosingPot  .attachOSC("/NaOH");
 }
 
 
@@ -502,56 +534,11 @@ void setupPots(){
 // Analog Input Variables
 elapsedMillis analogReadMillis;
 unsigned long analogReadInterval = 31;
-const uint8_t airSpeedPIN = 24;
-int lastAirSpeed = 0;
 
-// Output for lights in city
-
-struct CityLight {
-  CityLight(uint8_t a_pin, uint8_t a_pwm, bool a_on, float a_onTime, float a_offTime, float a_onTime2=666, float a_offTime2=667)
-  :pin(a_pin), pwm(a_pwm), on(a_on), onTime(a_onTime), offTime(a_offTime), onTime2(a_onTime+24), offTime2(a_offTime+24), initOn(a_on){}
-
-  bool update(float t){
-    return on = (t >= onTime && t <= offTime) || (t >= onTime2 && t <= offTime2);
-  }
-
-  void init(){
-    on = initOn;
-  }
-
-  uint8_t pin;
-  uint8_t pwm;
-  bool on;
-  float onTime;
-  float offTime;
-  float onTime2;
-  float offTime2;
-
-  bool initOn;
-};
-
-#define NUM_cityLights 8
-CityLight cityLights[NUM_cityLights] = {
-  CityLight( 3, 255, true , 0.00, 48.00, 1000, 10000),   // Kraftværk Kontor
-  CityLight( 4, 255, true , 10.0, 17.00, 10.0, 17.00),   // Vandtårn              
-  CityLight( 5, 255, true , 0.00, 48.00, 1000, 10000),   // Kraftværk Hovedbygning
-  CityLight( 6, 255, true , 6.00, 21.30, 6.00, 21.30),   // Røde Huse 
-  CityLight( 8, 255, true , 7.00, 23.00, 7.00, 23.00),   // Blå / Store Hvide byhuse
-  CityLight(10, 255, true , 7.70, 26.00, 7.70, 26.00),   // Stor boligblok / lille hvidt hus
-  CityLight(11, 255, true , 7.40, 23.90, 7.40, 23.90),   // Firkant Blok / byhus
-  CityLight(12, 255, true , 5.00, 21.00, 5.00, 21.00),   // Fabrik / Bondehus
-};
-
-
-// Analog Input Variables
-elapsedMillis cityLightMillis;
-unsigned long cityLightInterval = 29;
 
 // --- Initialize ----------------------------------------------------------->
 void setup() {
     Serial.begin(115200);
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, 1);    // turn *on* led
 
     delay(1000);
 
@@ -560,18 +547,8 @@ void setup() {
     Serial.print("Setting up IO channels");
     setupButtons();
     setupVUMeter();
+    setupLEDs();
     setupPots();
-
-    // Setup CityLights
-    for(int i=0; i<NUM_cityLights; i++){
-      pinMode(cityLights[i].pin, OUTPUT);
-      analogWrite(cityLights[i].pin, 0);
-    }
-
-    for(int i=0; i<NUM_cityLights; i++){
-      analogWrite(cityLights[i].pin, cityLights[i].pwm);
-      delay(300);
-    }
 
     Serial.println("....done");
 
@@ -584,11 +561,12 @@ void setup() {
     }
     Serial.println("....done");
 
-    if(false){
+    while(false){
       Serial.print("Test NeoPixel Strips - ColorWipe1");
       colorWipe(0, Adafruit_NeoPixel::Color(255,   0,   0)     , 1); // Red
       Serial.print("Test NeoPixel Strips - ColorWipe2");
-      colorWipe(1, Adafruit_NeoPixel::Color(255,   0,   0)     , 1); // Red
+      colorWipe(0, Adafruit_NeoPixel::Color(0,   255,   0)     , 1); // Red
+      colorWipe(0, Adafruit_NeoPixel::Color(0,   0,   255)     , 1); // Red
 
 
       // colorWipe(Adafruit_NeoPixel::Color(255,   0,   0)     , 2); // Red
@@ -597,7 +575,7 @@ void setup() {
       // colorWipe(Adafruit_NeoPixel::Color(255, 255, 255)     , 2); // White
       // while(1) {}
       colorWipe(Adafruit_NeoPixel::Color(  0,   0,   0)     , 0); // Black
-      Serial.println("....done");
+
     }
 
 
@@ -620,29 +598,31 @@ void setup() {
     Serial.print(localPort);
     Serial.println("....done");
 
-    digitalWrite(LED_BUILTIN, 0);    // turn *off* led
 
+    // Reset everything to default state
     reset();   
-
-
 }
 
 void reset(){
-  for(int i=0; i<NUM_cityLights; i++) cityLights[i].init();
-
   // Reset Buttons
-  startButton.setValue(false);
-  fillButton .setValue(false);
-  enableWindButton.setValue(true);
-  enableSunButton.setValue(true);
-  enablePlantButton.setValue(true);
-  buyElectricityButton.setValue(false);
-  sellElectricityButton.setValue(false);
+  startButton           .setValue(false);
+  resetButton           .setValue(false);
+  fillButton            .setValue(false);
+  enableWindButton      .setValue(true);
+  enableSunButton       .setValue(true);
+  enablePlantButton     .setValue(true);
+  buyElectricityButton  .setValue(false);
+  sellElectricityButton .setValue(false);
 
   // Reset VU Meters
-  ovenTempVU.setValue(0);
-  acidEmissionsVU.setValue(0);
-  coEmissionsVU.setValue(0);
+  ovenTempVU      .setValue(0);
+  acidEmissionsVU .setValue(0);
+  coEmissionsVU   .setValue(0);
+
+  // Reset LEDs
+  ovenTempAlarmLED      .set_value(false);
+  acidEmissionsAlarmLED .set_value(false);
+  coEmissionsAlarmLED   .set_value(false);
 
   setTime(12.0f);
 }
@@ -731,7 +711,7 @@ bool loopOsc(){
         windPower.set_value(v);
       });
 
-      msg.dispatch("/SunPower" , [](OSCMessage& m){
+      msg.dispatch("/SolarPower" , [](OSCMessage& m){
         float v = m.getFloat(0);
         solarPower.set_value(v);
       });
@@ -759,16 +739,19 @@ bool loopOsc(){
       msg.dispatch("/OvenTemp" , [](OSCMessage& m){
         float v = m.getFloat(0);
         ovenTempVU.setValue(v);
+        ovenTempAlarmLED.set_value(v < 0.25f || v > 0.75f);
       });
 
       msg.dispatch("/Acid" , [](OSCMessage& m){
         float v = m.getFloat(0);
         acidEmissionsVU.setValue(v);
+        acidEmissionsAlarmLED.set_value(v > 0.55f);
       });
 
       msg.dispatch("/CO" , [](OSCMessage& m){
         float v = m.getFloat(0);
         coEmissionsVU.setValue(v);
+        coEmissionsAlarmLED.set_value(v > 0.55f);
       });
 
       // msg.getAddress(str);
@@ -799,6 +782,7 @@ bool loopButtons(){
 
       // Update Buttons
       startButton          .update();
+      resetButton          .update();
       fillButton           .update();
       enableWindButton     .update();
       enableSunButton      .update();
@@ -806,30 +790,28 @@ bool loopButtons(){
       buyElectricityButton .update();
       sellElectricityButton.update();
 
-      if(startButton.pressed()){
-          startButtonElapsed = 0;
-          activity = true;
+      if(resetButton.pressed()){
+        reset();
+        activity = true;
       }
-      else if(startButton.released()){
-          reset();
-          sendAirSpeed();
-          if(startButtonElapsed < 2000){
-            sendCmd("StartButton");
-            startButton.setValue(true);
-          }
-          else {
-            sendCmd("Reset");
-            reset();
-          }
-          activity = true;
-      }
+
+      // if(startButton.pressed()){
+      //     startButtonElapsed = 0;
+      //     activity = true;
+      // }
+      // else if(startButton.released()){
+      //     reset();
+      //     if(startButtonElapsed < 2000){
+      //       sendCmd("StartButton");
+      //       startButton.setValue(true);
+      //     }
+      //     else {
+      //       sendCmd("Reset");
+      //       reset();
+      //     }
+      //     activity = true;
+      // }
       
-      if(fillButton.pressed()){
-          sendCmd("FillButton");
-          activity = true;
-      }
-
-
       buttonReadMillis = 0;
     }
 
@@ -856,107 +838,25 @@ bool loopLEDMeters()
   return activity;
 }
 
-
-
-
-
-
-float oscAirSpeed = 0.0f;
-
-void sendAirSpeed(){
-  oscMsg.setAddress("/value");
-  oscMsg.empty();
-  oscMsg.add(oscAirSpeed);
-  sendOsc(oscMsg, PiIp, PiPort);
-}
-
 bool loopAnalog(){
     bool activity = false;
 
     if(analogReadMillis > analogReadInterval){
-      airSpeedPot    .update();
-      energyDistPot  .update();
-      CaCO3DosingPot .update();
-      NaOHDosingPot  .update();
-
-
-        int airSpeed = analogRead(airSpeedPIN);
-        int diff = abs(lastAirSpeed - airSpeed);
-        if(airSpeed < 4)  airSpeed = 0;
-        else if(diff < 8) airSpeed = lastAirSpeed;
-        if(airSpeed != lastAirSpeed){
-            lastAirSpeed = airSpeed;
-            int airSpeedMidi = airSpeed/8;
-            oscAirSpeed = (airSpeedMidi / 128.);
-            sendAirSpeed();
-            activity = true;
-            Serial.print("Air: ");
-            Serial.println(oscAirSpeed);
-        }
-        analogReadMillis = 0;
+      activity |= airSpeedPot    .update();
+      activity |= energyDistPot  .update();
+      activity |= CaCO3DosingPot .update();
+      activity |= NaOHDosingPot  .update();
+      analogReadMillis = 0;
     }
+
     return activity;
 }
-
-/*
-void ovenPixelLoop(){
-  for(int i=0; i<26; i++){
-    if(i < amountInOven){
-      uint32_t color = Adafruit_NeoPixel::Color(255,0,0);
-      if(i > amountInOven_ok_min && i < amountInOven_ok_max) color = Adafruit_NeoPixel::Color(0,255,0);
-      strip2.setPixelColor(i, color);
-    }
-    else {
-      strip2.setPixelColor(i, 0);
-    }
-  }
-  strip2.show();
-
-  for(int i=0; i<strip1.numPixels(); i++){
-    if(i < amountInStorage){
-      uint32_t color = Adafruit_NeoPixel::Color(255,0,128);
-      strip1.setPixelColor(strip1.numPixels()-1-i, color);
-    }
-    else {
-      strip1.setPixelColor(i, 0);
-    }
-  }
-  strip1.show();
-  
-  fillButton .setLED(amountInStorage);
-  startButton.setLED(gameRunning);
-}
-*/
-
-/*
-void heatPixelLoop(){
-  static unsigned long counter = 0;
-  float h = heatFilter.value;
-  auto N = strip6.numPixels();
-  float a_min = 1;
-  float a = a_min;
-
-  for(int i=0; i<N; i++){
-    uint32_t color = Adafruit_NeoPixel::Color(a_min*h,0,a_min*(1.0-h));
-
-    a = pulse_vec[(i-counter)%PULSELEN];
-    color = Adafruit_NeoPixel::Color(a*h,0,a*(1.0-h));
-    
-    strip6.setPixelColor(i, color);
-  }
-  
-
-  counter++;
-  strip6.show();  
-}
-*/
 
 void pixelLoop(){
   if(pixelUpdateMillis > pixelUpdateInterval){
     loopLEDMeters();
   }
 }
-
 
 void loop(){
   current_millis = millis();    
@@ -965,17 +865,44 @@ void loop(){
   bool analogActivity = loopAnalog();
   bool activity = oscActivity || buttonActivity || analogActivity;
 
+  
+
   if(!oscActivity){
     pixelLoop();
   }
 
-  // blink the LED when any activity has happened
-  if(activity){
-    digitalWriteFast(LED_BUILTIN, HIGH); // LED on
-    ledOnMillis = 0;
-  }
-  if(ledOnMillis > 15){
-    digitalWriteFast(LED_BUILTIN, LOW);  // LED off
-  }
+  if(false){
+    // Test Code - Set all values based on airSpeedPot for easy testing
+  ovenPct.set_value(0.5);
+  airFlow.set_value(airSpeedPot.getValue());
+  plantPower.set_value(airSpeedPot.getValue());
+  ovenTempVU.setValue(airSpeedPot.getValue());
+
+  turbinePct.set_value(energyDistPot.getValue());
+  heatPct.set_value(1.0f - energyDistPot.getValue());
+
+  float kalk = CaCO3DosingPot .getValue();
+  float naoh = NaOHDosingPot  .getValue();
+  
+  dosing_meter1.set_value(kalk);
+  dosing_meter2.set_value(naoh);
+  acidEmissionsVU.setValue(kalk);
+  coEmissionsVU.setValue(naoh);
+
+  windPower.set_value(airSpeedPot.getValue());
+  solarPower.set_value(airSpeedPot.getValue());
+  plantElectricPower.set_value(airSpeedPot.getValue());
+
+  float buySellValue = (airSpeedPot.getValue() * 2.0f - 1.0f); // Map 0-1 to -1 to 1
+  buySellElectricityMeter.set_value(buySellValue); 
+  buySellElectricityMeter.set_color(buySellValue < 0 ? 255 : 0, buySellValue > 0 ? 255 : 0, 0); // Red for buying, Green for selling
+
+
+  // Alarms
+  ovenTempAlarmLED.set_value(airSpeedPot.getValue() > 0.8f);
+  acidEmissionsAlarmLED.set_value(kalk > 0.8f);
+  coEmissionsAlarmLED.set_value(naoh > 0.8f);
+
+  } // Test Code
 
 }
