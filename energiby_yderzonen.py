@@ -23,6 +23,8 @@ import urllib.request
 import json
 from scipy.interpolate import interp1d
 from dataclasses import dataclass
+import sys
+import signal
 
 
 # Run is FullScreen on two displays?
@@ -97,20 +99,48 @@ if len(monitors) < 2:
     print("Need at least two monitors connected.")
     # exit(1)
 
+# ==================== LOOKUP TABLE ====================
+class LookupTable:
+    def __init__(self, x_values, y_values):
+        self.x_values = np.array(x_values)
+        self.y_values = np.array(y_values)
+        self.interpolator = interp1d(self.x_values, self.y_values, kind='linear', fill_value="extrapolate")
+    def get(self, x):
+        x = float(x)
+        y = float(self.interpolator(x))
+        return y
+
 # ==================== LOWPASS FILTER====================
 class OnePole:
-    def __init__(self, alpha, initial_value):
-        self.alpha = alpha
+    def __init__(self, tau, initial_value):
+        self.tau = max(float(tau), 1e-12)
         self.value = initial_value
 
-    def set_alpha(self, alpha):
-        self.alpha = alpha
+    @staticmethod
+    def alpha_from_tau(tau, dt):
+        tau = max(float(tau), 1e-12)
+        dt = max(float(dt), 0.0)
+        return 1.0 - math.exp(-dt / tau)
+
+    @staticmethod
+    def tau_from_alpha(alpha, dt):
+        alpha = min(max(float(alpha), 1e-9), 1.0 - 1e-9)
+        dt = max(float(dt), 1e-12)
+        return -dt / math.log(1.0 - alpha)
+
+    def set_tau(self, tau):
+        self.tau = max(float(tau), 1e-12)
     
-    def update(self, new_value):
-        self.value = new_value * self.alpha + self.value * (1 - self.alpha)
+    def set_alpha(self, alpha, dt):
+        self.tau = OnePole.tau_from_alpha(alpha, dt)
+    
+    def update(self, new_value, dt):
+        alpha = OnePole.alpha_from_tau(self.tau, dt)
+        self.value = new_value * alpha + self.value * (1 - alpha)
         return self.value
     
-    def update_alpha(self, new_value, alpha):
+    def update_tau(self, new_value, tau, dt):
+        alpha = OnePole.alpha_from_tau(tau, dt)
         self.value = new_value * alpha + self.value * (1 - alpha)
         return self.value
     
@@ -151,16 +181,17 @@ class EnergyRequirement:
     runtime.
     """
 
-    def __init__(self, mw_needed, N=961, mul=1, offset=0.0, uncertainty=7.0, alpha=0.02):
+    def __init__(self, mw_needed, N=961, mul=1, offset=0.0, uncertainty=7.0, tau=0.002473):
         self.hours_vector = np.linspace(0, 48, 49, True)
         self.N = N
-        self.set_mw_needed(mw_needed, mul, offset, uncertainty, alpha)
+        self.set_mw_needed(mw_needed, mul, offset, uncertainty, tau)
 
-    def set_mw_needed(self, mw_needed, mul=1.0, offset=0.0, uncertainty=7.0, alpha=0.02):
+    def set_mw_needed(self, mw_needed, mul=1.0, offset=0.0, uncertainty=7.0, tau=0.002473):
         """Assign a new hourly demand pattern and recompute all curves."""
         self.offset = offset
         self.uncertainty = uncertainty * mul
-        self.alpha = alpha
+        self.tau = tau  # Time constant for demand smoothing
+        alpha = OnePole.alpha_from_tau(self.tau, dt)
 
         self.mw_needed = np.array(mw_needed) * mul + offset
         self.time_vector = np.zeros(self.N)
@@ -171,8 +202,9 @@ class EnergyRequirement:
         last_need = self.mw_needed[0]
         spline = interp1d(self.hours_vector, self.mw_needed, kind='cubic')
         for x in range(self.N):
-            t = 0.05 * x
-            last_need = spline(t) * self.alpha + last_need * (1.0 - self.alpha)
+            # Clamp to interpolation domain to avoid float overshoot at 48h.
+            t = min(dt * x, self.hours_vector[-1])
+            last_need = spline(t) * alpha + last_need * (1.0 - alpha)
             self.need_vector[x] = last_need
             self.need_min_vector[x] = last_need - self.uncertainty
             self.need_max_vector[x] = last_need + self.uncertainty
@@ -187,15 +219,73 @@ default_mw_needed = [
     24.0,
 ]
 
-# Number of time steps in the simulation (48 hours with 0.05 hour time steps)
-N = 961
+# ==================== SAMPLING TIME ====================
+Ts = 0.04  # Wall-clock sampling time in seconds (40 ms between OSC updates)
+dt_base = 5/60  # Base simulation time step in hours (1 minute per step for high fidelity)
+playback_speed = 0.2  # Playback speed factor: <1 = slower, >1 = faster. 0.1 = 10x slower than base
+dt = dt_base * playback_speed  # Actual simulation time step in hours
+N = int(np.ceil(48.0 / dt)) + 1  # Total steps to cover 48 hours
+
+# Fixed legacy simulation step used before refactoring (3 minutes).
+# Keep alpha->tau conversion anchored to this value to preserve old behavior.
+legacy_filter_dt = 0.1  # hours
+
+# Equivalent taus for legacy OnePole alphas using the fixed legacy step.
+tau_wind_f1 = 15
+tau_wind_f2 = 1.0
+tau_sun_day = 2
+tau_sun_night = 1
+tau_power_filter = 1
+tau_turbine_filter = 0.5
+tau_emission_filter = 1
+tau_power_up = 5
+tau_power_down = 5
+tau_power_empty = 1
+
+# Power Ranges 
+power_plant_max = 600.0 # Max power output of the plant in MW
+wind_power_max = 200.0  
+sun_power_max = 200.0 
+
+# Lookup Tables
+oven_temp_lookup = LookupTable(
+    [0.00, 0.20, 0.50, 0.80, 1.00],
+    [0.00, 0.20, 0.40, 0.70, 1.00])
+
+oven_disp_lookup = LookupTable(
+    [0.0, 0.1, 0.20, 0.3, 0.4, 0.5, 0.6, 0.7 , 0.8 , 0.9, 1.0],
+    [0.0, 0.2, 0.35, 0.5, 0.6, 0.7, 0.8, 0.85, 0.95, 1.0, 1.0])
+
+oven_pct_to_power_lookup = LookupTable(
+    [0.0, 0.05, 0.2, 0.4, 0.8, 1.0],
+    [0.0, 0.1 , 0.3, 0.5, 1.0, 1.0])
+
+air_to_power_lookup = LookupTable(
+    [0.0, 0.2, 0.5, 0.8, 1.0],
+    [0.0, 0.1, 0.4, 0.9, 1.0])
+
+print(f"Wall-clock Ts = {Ts*1000:.1f} ms, Playback speed = {playback_speed}x")
+print(f"Simulation dt = {dt*3600:.1f} seconds/step, {dt*60:.2f} min/step")
+print(f"N = {N} steps for 48 hours (runtime ~{N*Ts:.1f} seconds)")
+print(f"OnePole taus (equivalent to previous alpha tuning at dt={legacy_filter_dt} h):")
+print(f"  tau_wind_f1      = {tau_wind_f1:.6f} h ({tau_wind_f1*3600:.2f} s)")
+print(f"  tau_wind_f2      = {tau_wind_f2:.6f} h ({tau_wind_f2*3600:.2f} s)")
+print(f"  tau_sun_day      = {tau_sun_day:.6f} h ({tau_sun_day*3600:.2f} s)")
+print(f"  tau_sun_night    = {tau_sun_night:.6f} h ({tau_sun_night*3600:.2f} s)")
+print(f"  tau_power_filter = {tau_power_filter:.6f} h ({tau_power_filter*3600:.2f} s)")
+print(f"  tau_turbine      = {tau_turbine_filter:.6f} h ({tau_turbine_filter*3600:.2f} s)")
+print(f"  tau_emission     = {tau_emission_filter:.6f} h ({tau_emission_filter*3600:.2f} s)")
+print(f"  tau_power_up     = {tau_power_up:.6f} h ({tau_power_up*3600:.2f} s)")
+print(f"  tau_power_down   = {tau_power_down:.6f} h ({tau_power_down*3600:.2f} s)")
+print(f"  tau_power_empty  = {tau_power_empty:.6f} h ({tau_power_empty*3600:.2f} s)")
+# =====================================================
 
 # instantiate requirement object; electricity and heat profiles can be changed independently
 class EnergyRequirements:
     def __init__(self):
         # Set default curves for both electricity and heat; they can be changed independently at runtime using the set_mw_needed method
-        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, alpha=0.020, offset= 3.0, mul=10.0)
-        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=7.0, alpha=0.005, offset=-8.0, mul=10.0)
+        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, tau=4, offset= 3.0, mul=8.0)
+        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, tau=12, offset=-8.0, mul=9.0)
 
     def get_total_need_vector(self):
         return self.electricity.need_vector + self.heat.need_vector
@@ -203,6 +293,11 @@ class EnergyRequirements:
     def get_total_need_at(self, index):
         return self.electricity.need_vector[index] + self.heat.need_vector[index]
 
+    def get_electricity_quotient_at(self, index):
+        return self.electricity.need_vector[index] / self.get_total_need_at(index)
+    
+    def get_heat_quotient_at(self, index):
+        return self.heat.need_vector[index] / self.get_total_need_at(index)
 
 
 def timeOfDay(t):
@@ -220,19 +315,20 @@ index = 0
 run = 0
 t = 0  # Time in hours
 td = 0 # Time of day in hours (0-24)
+reset_on_start = False
 
 # ------------------------------------------------------------------------------------------- #
 # ---------------------------------- Wind Generator ----------------------------------------- #
 # ------------------------------------------------------------------------------------------- #
 class WindGenerator:
     def __init__(self):
-        self.max = 350.0  # Max Wind Power in MW
+        self.max = wind_power_max  # Max Wind Power in MW
         self.n = 0
         self.N = 15
-        self.mean = 100.0
-        self.sd = 15.0
-        self.f1 = OnePole(0.05, self.mean)
-        self.f2 = OnePole(0.005, self.mean)
+        self.mean = 150.0
+        self.sd = 100.0
+        self.f1 = OnePole(tau_wind_f1, self.mean)
+        self.f2 = OnePole(tau_wind_f2, self.mean)
         self.power = self.mean
         self.tmp = self.mean
         self.vector = np.zeros(N)
@@ -244,22 +340,21 @@ class WindGenerator:
     def calculate(self):
         if self.n >= self.N:
             self.tmp = np.random.normal(self.mean, self.sd)
-            print(self.tmp)
             self.n = 0
         else:
             self.n = self.n + 1
 
-        self.f1.update(self.tmp)
-        self.f2.update(self.f1.get())
-        self.power = max(self.f2.get(), 0)
+        self.f1.update(self.tmp, dt)
+        self.f2.update(self.f1.get(), dt)
+        self.power = min(max(self.f2.get(), 0), self.max)
         return self.power
     
     def make_new_vector(self):
         # Reset Wind
-        self.mean = np.random.normal(10.0, 10.0)
+        self.mean = np.random.normal(self.max/4, self.max/4)
         if self.mean < 0:
             self.mean = 0
-        self.sd = abs(np.random.normal(0.0, 15.0))
+        self.sd = abs(np.random.normal(self.max/4, self.max))
         
         self.f1.reset(self.mean)
         self.f2.reset(self.mean)
@@ -267,6 +362,7 @@ class WindGenerator:
         self.tmp = self.mean
         for x in range(N):
             self.vector[x] = self.calculate()
+            # print(self.vector[x])
 
     def get_available_power(self, index):
         return self.vector[index]
@@ -283,9 +379,9 @@ class WindGenerator:
 class SunGenerator:
     def __init__(self):
         # use the current average electricity demand for scaling
-        self.max = 200 # Max Solar Power in MW, scaled to be a fraction of the average electricity demand
-        self.f1 = OnePole(0.1, 0.0)
-        self.f2 = OnePole(0.1, self.f1.get())
+        self.max = sun_power_max  # Max Solar Power in MW, scaled to be a fraction of the average electricity demand
+        self.f1 = OnePole(tau_sun_day, 0.0)
+        self.f2 = OnePole(tau_sun_day, self.f1.get())
         self.power = 0.0
         self.vector = np.zeros(N)
         self.active = True
@@ -295,16 +391,16 @@ class SunGenerator:
 
     def calculate(self, td):
         sol = 0.0
-        sol_alpha = 0.1
+        sol_tau = tau_sun_day
         if td > 5 and td < 13:
             sol = self.max
         else:
             sol = 0.0
-            sol_alpha = 0.05
+            sol_tau = tau_sun_night
         
         # Two stage lowpass filter to create a smoother curve
-        sol = self.f1.update_alpha(sol, sol_alpha)
-        sol = self.f2.update_alpha(sol, sol_alpha)
+        sol = self.f1.update_tau(sol, sol_tau, dt)
+        sol = self.f2.update_tau(sol, sol_tau, dt)
 
         self.power = sol
         
@@ -313,7 +409,7 @@ class SunGenerator:
     def make_new_vector(self):
         self.__init__()  # Reset the sun generator to create a new sun profile
         for x in range(N):
-            td = timeOfDay(0.05 * x)
+            td = timeOfDay(dt * x)  # Use dt for time calculation
             self.vector[x] = self.calculate(td)
 
     def get_available_power(self, index):
@@ -492,30 +588,30 @@ class PowerPlant:
         self.oven_amount_ok_min = 16.0
         self.oven_amount_ok_max = 25.0
         self.oven_amount_to_fill = 3.0
-        self.oven_consumption_rate = 0.08
+        self.oven_consumption_rate = 0.8
         # Air flow state
         self.air_flow = 0.5
 
         # power generation state
-        self.power_max = 600  # MW
+        self.power_max = power_plant_max  # MW
         self.calorific_scaling = 2.0
-        self.alpha_up = 0.008
-        self.alpha_down = 0.008
-        self.alpha_empty = 0.01
+        self.tau_up = tau_power_up
+        self.tau_down = tau_power_down
+        self.tau_empty = tau_power_empty
         # initialise filter using the current electricity requirement baseline
-        self.power_filter = OnePole(0.1, self.requirements.get_total_need_at(0))
+        self.power_filter = OnePole(tau_power_filter, self.requirements.get_total_need_at(0))
         self.lambda_val = 1.0
         self.v1 = 0.0
 
         # Turbine amount, i.e. the percentage of power that is converted to electricity
-        self.turbine_pct = 0.66
-        self.turbine_pct_filter = OnePole(0.1, self.turbine_pct)
+        self.turbine_pct = requirements.get_electricity_quotient_at(0)
+        self.turbine_pct_filter = OnePole(tau_turbine_filter, self.turbine_pct)
 
         # Emission
         self.CaCO3_amount = 0.0
         self.NaOH_amount = 0.0
-        self.acid_emission = OnePole(0.1, 0.0)
-        self.CO_emission = OnePole(0.1, 0.0)
+        self.acid_emission = OnePole(tau_emission_filter, 0.0)
+        self.CO_emission = OnePole(tau_emission_filter, 0.0)
 
         # Active state
         self.active = True
@@ -569,7 +665,8 @@ class PowerPlant:
         return 800.0 * self.get_total_power_pct()
     
     def get_oven_temperature_pct(self):
-        return self.get_total_power_pct()
+        temp = oven_temp_lookup.get(self.get_total_power_pct())
+        return temp
     
     def get_lambda(self):
         if self.oven_amount > 0:
@@ -623,7 +720,7 @@ class PowerPlant:
             acid_emission = 0
         elif acid_emission > 1:
             acid_emission = 1            
-        return self.acid_emission.update(acid_emission)
+        return self.acid_emission.update(acid_emission, dt)
         
     def calculate_CO_emission(self):
         lambda_scaling = 1.0
@@ -634,14 +731,16 @@ class PowerPlant:
             CO_emission = 0
         elif CO_emission > 1:
             CO_emission = 1
-        return self.CO_emission.update(CO_emission)
+        return self.CO_emission.update(CO_emission, dt)
 
     def calculate_power(self):
         oven_pct       = self.get_oven_pct()
         oven_pct_squared = oven_pct * oven_pct
         airflow = self.air_flow
         airflow_squared = airflow * airflow
+        airflow_cubed = airflow * airflow * airflow
         moisture       = self.oven_waste.moisture_content
+        moisture = 0
         energy_density = self.oven_waste.energy_density
 
         # --- Lambda: air-to-fuel ratio ---
@@ -671,7 +770,8 @@ class PowerPlant:
         # Driven by oxygen supply (air_flow) and combustion surface area (oven_pct),
         # strongly dampened by moisture.
                 
-        burn_rate = (1+airflow_squared) * (1+oven_pct_squared) * moisture_factor * self.oven_consumption_rate
+        burn_rate = (1+airflow_cubed*2) * (1+oven_pct) * moisture_factor * self.oven_consumption_rate
+        burn_rate *= dt # Scale by time step to maintain consistent behavior across different dt values
         
         self.oven_amount = max(self.oven_amount - burn_rate, 0.0)
         self.oven_waste.amount = self.oven_amount
@@ -680,20 +780,20 @@ class PowerPlant:
         # Released heat ∝ burn_rate × net calorific value × combustion efficiency.
         # Net calorific value: moisture lowers energy yield.
         if self.oven_amount <= 0.0:
-            self.power_filter.update_alpha(0.0, self.alpha_empty)
+            self.power_filter.update_tau(0.0, self.tau_empty, dt)
         else:
             net_calorific = energy_density * moisture_factor * self.calorific_scaling
-            target_power  = airflow_squared * oven_pct * net_calorific * combustion_eff * self.power_max
-            target_power  = max(0.0, min(target_power, self.power_max))
+            target_power  = air_to_power_lookup.get(airflow) * oven_pct_to_power_lookup.get(oven_pct) * net_calorific * combustion_eff * self.power_max
+            target_power  = max(0.0, target_power)
 
-            alpha = self.alpha_up if target_power > self.power_filter.get() else self.alpha_down
-            self.power_filter.update_alpha(target_power, alpha)
+            tau = self.tau_up if target_power > self.power_filter.get() else self.tau_down
+            self.power_filter.update_tau(target_power, tau, dt)
 
         return self.power_filter.get()
     
     def calculate(self):
         # Update the turbine filter
-        self.turbine_pct_filter.update(self.turbine_pct)
+        self.turbine_pct_filter.update(self.turbine_pct, dt)
         # Calculate the power output of the plant
         power = self.calculate_power()
         # Calculate the emissions
@@ -829,15 +929,15 @@ def sendElData():
     oscSenderControlPanel.send_message("/Acid", energy_grid.powerplant.get_acid_emission())
     oscSenderControlPanel.send_message("/CO", energy_grid.powerplant.get_CO_emission())
     oscSenderControlPanel.send_message("/ElectricityPct", energy_grid.powerplant.get_electricity_pct())
-    oscSenderControlPanel.send_message("/HeatPct", energy_grid.powerplant.get_heat_pct())
+    # oscSenderControlPanel.send_message("/HeatPct", energy_grid.powerplant.get_heat_pct())
     oscSenderControlPanel.send_message("/PlantElectricPower", energy_grid.powerplant.get_electric_power_pct())
     oscSenderControlPanel.send_message("/OvenTemp", energy_grid.powerplant.get_oven_temperature_pct())
     oscSenderControlPanel.send_message("/CaCO3", energy_grid.powerplant.CaCO3_amount)
     oscSenderControlPanel.send_message("/NaOH", energy_grid.powerplant.NaOH_amount)
-    oscSenderControlPanel.send_message("/TurbinePct", energy_grid.powerplant.turbine_pct)
+    oscSenderControlPanel.send_message("/TurbinePct", energy_grid.powerplant.get_electricity_pct())
     oscSenderControlPanel.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
     oscSenderControlPanel.send_message("/Buy", energy_grid.electric_market.get()/energy_grid.electric_market.max)
-    oscSenderOvenDisplay.send_message("/OvenIntensity", energy_grid.powerplant.get_oven_temperature_pct())
+    oscSenderOvenDisplay.send_message("/OvenIntensity", oven_disp_lookup.get(energy_grid.powerplant.get_total_power_pct()))
     oscSenderStorageDisplay.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
 
 # Non-blocking OSC sender using thread pool
@@ -848,15 +948,13 @@ def sendElDataAsync():
 def updatePlot():
     lel.set_xdata(x_values)
     lel.set_ydata(el_plot_values)
-    # Use async OSC sending to avoid blocking the render thread
-    sendElDataAsync()
 
 def updateHeatPlot():
     lheat.set_xdata(x_values)
     lheat.set_ydata(heat_plot_values)
 
 def clear():
-    global x_values, el_plot_values, b_values, heat_plot_values, s_values, index, run, t, td
+    global x_values, el_plot_values, b_values, heat_plot_values, s_values, index, run, t, td, reset_on_start
     global production_filter
 
     run = 0
@@ -869,6 +967,7 @@ def clear():
     index = 0
     t = 0
     td = 0
+    reset_on_start = False
     
     updatePlot()
     updateHeatPlot()
@@ -876,40 +975,62 @@ def clear():
 def start(value):
     global run
     if value:
+        if reset_on_start: 
+            clear()
         run = 1
     else:
         run = 0
+
+# ==================== SAMPLING TIME ====================
+Ts = 0.04  # Sampling time in seconds (40 ms)
+# =====================================================
 
 # Frame counter for batching updates
 render_frame_counter = 0
 BATCH_SIZE = 2  # Update every 2 frames to reduce rendering overhead
 
-# Animate Function for the plotting - OPTIMIZED
-def animate(i):
-    global index, run, t, td, render_frame_counter
-    if run > 0:
-        t = index * 0.05
-        td = timeOfDay(t)
-        energy_grid.calculate(index)
-        x_values.append(t)
-        el_plot_values.append(energy_grid.get_total_electricity(index))
-        heat_plot_values.append(energy_grid.get_total_heat(index))
+# Game loop thread - runs independently at fixed Ts rate
+game_loop_thread = None
+game_loop_running = False
+
+def game_loop():
+    """Separate game simulation loop running at fixed Ts rate (wall-clock)"""
+    global index, run, t, td, reset_on_start
+    
+    while True:
+        if run > 0:
+            t = index * dt  # Simulation time in hours
+            td = timeOfDay(t)
+            energy_grid.calculate(index)
+            x_values.append(t)
+            el_plot_values.append(energy_grid.get_total_electricity(index))
+            heat_plot_values.append(energy_grid.get_total_heat(index))
+            
+            # Send OSC data at game loop frequency (faster updates every Ts wall-clock)
+            sendElData()
+            
+            if t >= 48.0:
+                run = 0
+                reset_on_start = True
+                print("Consumption {0}".format(index))
+            
+            index = index + 1
         
+        # Sleep for exactly Ts wall-clock time to maintain fixed update frequency
+        time.sleep(Ts)
+
+# Animate Function for the plotting - UPDATE ONLY (no simulation)
+def animate(i):
+    global render_frame_counter
+    if run > 0:
         # Batch rendering updates to reduce matplotlib overhead
         render_frame_counter += 1
         if render_frame_counter >= BATCH_SIZE:
             updatePlot()
             render_frame_counter = 0
-        
-        if t >= 48.0:
-            run = 0
-            print("Consumption {0}".format(index))
-            updatePlot()  # Final update
-
-        index = index + 1
     
-    # Minimal sleep to prevent CPU spinning (set to 0 for maximum speed on RPi)
-    time.sleep(0.05)
+    # Minimal sleep to prevent CPU spinning
+    time.sleep(0.01)
 
 def animateHeat(i):
     global index, run, t, td
@@ -917,6 +1038,35 @@ def animateHeat(i):
         # Only update heat plot occasionally to reduce render load
         updateHeatPlot()
     time.sleep(0.01)
+
+
+def exit_program(event=None):
+    """Close plots and exit the program."""
+    global run
+    run = 0
+    try:
+        server.shutdown()
+        server.server_close()
+    except Exception:
+        pass
+    try:
+        plt.close('all')
+    finally:
+        raise SystemExit(0)
+
+
+def on_key_press(event):
+    if event.key == 'escape':
+        exit_program()
+
+
+def bind_exit_keys():
+    fig1.canvas.mpl_connect('key_press_event', on_key_press)
+    fig2.canvas.mpl_connect('key_press_event', on_key_press)
+
+
+def handle_sigint(signum, frame):
+    exit_program()
 
 # --------------------------------------------------------------
 # ------------------------- OSC --------------------------------
@@ -941,7 +1091,7 @@ dispatcher.map("/UsePlant", lambda addr, value: energy_grid.powerplant.activate(
 dispatcher.map("/FillOven", lambda addr, value: energy_grid.powerplant.fill_oven())
 dispatcher.map("/CaCO3", lambda addr, value: energy_grid.powerplant.set_CaCO3_amount(value))
 dispatcher.map("/NaOH", lambda addr, value: energy_grid.powerplant.set_NaOH_amount(value))
-dispatcher.map("/EnergyDist", lambda addr, value: energy_grid.powerplant.set_turbine_pct(value))
+dispatcher.map("/EnergyDist", lambda addr, value: energy_grid.powerplant.set_turbine_pct(1.0-value))
 dispatcher.map("/Buy", lambda addr, value: energy_grid.electric_market.buy())
 dispatcher.map("/Sell", lambda addr, value: energy_grid.electric_market.sell())
 
@@ -963,11 +1113,19 @@ oscThread.daemon = True  # Make it a daemon thread so it doesn't block shutdown
 oscThread.start()
 
 clear()
+bind_exit_keys()
+signal.signal(signal.SIGINT, handle_sigint)
+start(True)
+
+# Start the game loop thread
+game_loop_thread = Thread(target=game_loop)
+game_loop_thread.daemon = True  # Make it a daemon thread
+game_loop_thread.start()
 
 # Start the Animation Function with optimized settings
-# Use larger interval (50ms) for RPi to reduce CPU load, disable blitting as matplotlib TkAgg doesn't support it well
-ani1 = FuncAnimation(fig1, animate, interval=50, blit=False, cache_frame_data=False)
-ani2 = FuncAnimation(fig2, animateHeat, interval=50, blit=False, cache_frame_data=False)
+# Use larger interval (100ms) since game updates are independent
+ani1 = FuncAnimation(fig1, animate, interval=100, blit=False, cache_frame_data=False)
+ani2 = FuncAnimation(fig2, animateHeat, interval=100, blit=False, cache_frame_data=False)
 
 plt.figure(fig1.number)
 fig1.canvas.manager.window.attributes('-fullscreen', FullScreen)
@@ -978,7 +1136,10 @@ fig2.canvas.manager.window.attributes('-fullscreen', FullScreen)
 fig2.canvas.draw()
 
 # Show the plots (this will block until the windows are closed)
-plt.show()    
+try:
+    plt.show()
+except KeyboardInterrupt:
+    exit_program()
 
 
 # ==================== RASPBERRY PI OPTIMIZATION TIPS ====================
