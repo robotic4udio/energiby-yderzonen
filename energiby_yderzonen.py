@@ -152,8 +152,6 @@ class OnePole:
         return self.value
 
 
-
-
 # Data synchronization for multi-threaded rendering
 data_lock = Lock()
 rendering_queue = {'x': [], 'y': [], 'v': []}
@@ -169,7 +167,6 @@ oscSenderStorageDisplay = udp_client.SimpleUDPClient("192.168.0.104",7134)
 global x_values, el_plot_values, index, run, t, td
 
 # Data about the energy requirements
-
 class EnergyRequirement:
     """Encapsulate a demand profile and derived curves.
 
@@ -226,9 +223,8 @@ playback_speed = 0.2  # Playback speed factor: <1 = slower, >1 = faster. 0.1 = 1
 dt = dt_base * playback_speed  # Actual simulation time step in hours
 N = int(np.ceil(48.0 / dt)) + 1  # Total steps to cover 48 hours
 
-# Fixed legacy simulation step used before refactoring (3 minutes).
-# Keep alpha->tau conversion anchored to this value to preserve old behavior.
-legacy_filter_dt = 0.1  # hours
+# Game
+point_score = 0
 
 # Equivalent taus for legacy OnePole alphas using the fixed legacy step.
 tau_wind_f1 = 15
@@ -267,17 +263,6 @@ air_to_power_lookup = LookupTable(
 print(f"Wall-clock Ts = {Ts*1000:.1f} ms, Playback speed = {playback_speed}x")
 print(f"Simulation dt = {dt*3600:.1f} seconds/step, {dt*60:.2f} min/step")
 print(f"N = {N} steps for 48 hours (runtime ~{N*Ts:.1f} seconds)")
-print(f"OnePole taus (equivalent to previous alpha tuning at dt={legacy_filter_dt} h):")
-print(f"  tau_wind_f1      = {tau_wind_f1:.6f} h ({tau_wind_f1*3600:.2f} s)")
-print(f"  tau_wind_f2      = {tau_wind_f2:.6f} h ({tau_wind_f2*3600:.2f} s)")
-print(f"  tau_sun_day      = {tau_sun_day:.6f} h ({tau_sun_day*3600:.2f} s)")
-print(f"  tau_sun_night    = {tau_sun_night:.6f} h ({tau_sun_night*3600:.2f} s)")
-print(f"  tau_power_filter = {tau_power_filter:.6f} h ({tau_power_filter*3600:.2f} s)")
-print(f"  tau_turbine      = {tau_turbine_filter:.6f} h ({tau_turbine_filter*3600:.2f} s)")
-print(f"  tau_emission     = {tau_emission_filter:.6f} h ({tau_emission_filter*3600:.2f} s)")
-print(f"  tau_power_up     = {tau_power_up:.6f} h ({tau_power_up*3600:.2f} s)")
-print(f"  tau_power_down   = {tau_power_down:.6f} h ({tau_power_down*3600:.2f} s)")
-print(f"  tau_power_empty  = {tau_power_empty:.6f} h ({tau_power_empty*3600:.2f} s)")
 # =====================================================
 
 # instantiate requirement object; electricity and heat profiles can be changed independently
@@ -869,7 +854,7 @@ energy_grid = EnergyGrid()
 
 
 def plot_electricity(fig):
-    global lb,lheat,ls,lel
+    global lb,lheat,ls,lel,score_text
     ax = fig.gca()  # Get the current axes
     ax.set_xlim([0,48]) # Set the x-limits
     ax.set_ylim([0,600]) # Set the y-limits
@@ -887,6 +872,17 @@ def plot_electricity(fig):
     #lheat, = ax.plot(x_values,heat_plot_values,'b-', label="Vind") # Create a line with the data
     lel,  = plt.plot(x_values,el_plot_values,'k-', label="El Produktion") # Create a line with the data
     #ls, = ax.plot(x_values,s_values,'k-', label="Energi til Net") # Create a line with the data
+    score_text = ax.text(
+        0.98,
+        0.98,
+        f"Score: {int(point_score)}",
+        transform=ax.transAxes,
+        ha='right',
+        va='top',
+        fontsize=24,
+        fontweight='bold',
+        bbox=dict(facecolor='white', alpha=0.8, edgecolor='black')
+    )
 
     plt.legend(loc='upper left')
     plt.grid(True)
@@ -948,13 +944,14 @@ def sendElDataAsync():
 def updatePlot():
     lel.set_xdata(x_values)
     lel.set_ydata(el_plot_values)
+    score_text.set_text(f"Score: {int(point_score)}")
 
 def updateHeatPlot():
     lheat.set_xdata(x_values)
     lheat.set_ydata(heat_plot_values)
 
 def clear():
-    global x_values, el_plot_values, b_values, heat_plot_values, s_values, index, run, t, td, reset_on_start
+    global x_values, el_plot_values, b_values, heat_plot_values, s_values, index, run, t, td, reset_on_start, point_score
     global production_filter
 
     run = 0
@@ -968,7 +965,8 @@ def clear():
     t = 0
     td = 0
     reset_on_start = False
-    
+    point_score = 0
+
     updatePlot()
     updateHeatPlot()
     
@@ -981,21 +979,52 @@ def start(value):
     else:
         run = 0
 
-# ==================== SAMPLING TIME ====================
-Ts = 0.04  # Sampling time in seconds (40 ms)
-# =====================================================
-
-# Frame counter for batching updates
-render_frame_counter = 0
-BATCH_SIZE = 2  # Update every 2 frames to reduce rendering overhead
 
 # Game loop thread - runs independently at fixed Ts rate
 game_loop_thread = None
 game_loop_running = False
 
+def calculate_score(i):
+    # Simple scoring based on how well production matches requirement
+    score = 100.0
+    
+    # Electricity Punishment
+    electricity_min = energy_grid.requirements.electricity.need_min_vector[i]
+    electricity_need = energy_grid.requirements.electricity.need_vector[i]
+    electricity_prod = energy_grid.get_total_electricity(i)
+
+    if electricity_prod < electricity_min:
+        score -= (electricity_min - electricity_prod) # Extra penalty for not meeting minimum electricity requirement
+        score -= abs(electricity_prod - electricity_need) * 0.2 # Penalize electricity mismatch
+    else:
+        score -= abs(electricity_prod - electricity_need) * 0.1 # Penalize electricity mismatch
+
+    # Heat Punishment
+    heat_min  = energy_grid.requirements.heat.need_min_vector[i]
+    heat_need = energy_grid.requirements.heat.need_vector[i]
+    heat_prod = energy_grid.get_total_heat(i)
+
+    if heat_prod < heat_min:
+        score -= abs(heat_prod - heat_need) * 0.2 # Penalize heat mismatch
+        score -= (heat_min - heat_prod)
+    else: 
+        score -= abs(heat_prod - heat_need) * 0.1 # Penalize heat mismatch
+
+    # Emissions Punishment
+    score -= abs(energy_grid.powerplant.oven_waste.acid_amount - energy_grid.powerplant.CaCO3_amount) * 10
+    score -= abs(energy_grid.powerplant.oven_waste.co_amount   - energy_grid.powerplant.NaOH_amount) * 10
+
+    score = max(1,score)
+
+    # print(score)
+    return score
+    
+    
+
+
 def game_loop():
     """Separate game simulation loop running at fixed Ts rate (wall-clock)"""
-    global index, run, t, td, reset_on_start
+    global index, run, t, td, reset_on_start, point_score
     
     while True:
         if run > 0:
@@ -1008,6 +1037,9 @@ def game_loop():
             
             # Send OSC data at game loop frequency (faster updates every Ts wall-clock)
             sendElData()
+
+            point_score += calculate_score(index)
+            # print(point_score)
             
             if t >= 48.0:
                 run = 0
@@ -1021,22 +1053,15 @@ def game_loop():
 
 # Animate Function for the plotting - UPDATE ONLY (no simulation)
 def animate(i):
-    global render_frame_counter
     if run > 0:
-        # Batch rendering updates to reduce matplotlib overhead
-        render_frame_counter += 1
-        if render_frame_counter >= BATCH_SIZE:
-            updatePlot()
-            render_frame_counter = 0
-    
-    # Minimal sleep to prevent CPU spinning
+        updatePlot()
+
     time.sleep(0.01)
 
 def animateHeat(i):
-    global index, run, t, td
     if run > 0:
-        # Only update heat plot occasionally to reduce render load
         updateHeatPlot()
+
     time.sleep(0.01)
 
 
