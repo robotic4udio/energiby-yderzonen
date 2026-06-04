@@ -157,11 +157,12 @@ data_lock = Lock()
 rendering_queue = {'x': [], 'y': [], 'v': []}
 
 # Thread pool for parallel calculations
-executor = ThreadPoolExecutor(max_workers=3)
+executor = ThreadPoolExecutor(max_workers=4)
 
-oscSenderControlPanel = udp_client.SimpleUDPClient("192.168.0.105",7134)
 oscSenderOvenDisplay = udp_client.SimpleUDPClient("192.168.0.101",7134)
 oscSenderStorageDisplay = udp_client.SimpleUDPClient("192.168.0.104",7134)
+oscSenderControlPanel = udp_client.SimpleUDPClient("192.168.0.105",7134)
+oscSenderWall = udp_client.SimpleUDPClient("192.168.0.106",7134)
 
 # Variables used for the live plot
 global x_values, el_plot_values, index, run, t, td
@@ -178,12 +179,12 @@ class EnergyRequirement:
     runtime.
     """
 
-    def __init__(self, mw_needed, N=961, mul=1, offset=0.0, uncertainty=7.0, tau=0.002473):
+    def __init__(self, mw_needed, N=961, mul=1.0, offset=0.0, uncertainty=7.0, tau=1):
         self.hours_vector = np.linspace(0, 48, 49, True)
         self.N = N
         self.set_mw_needed(mw_needed, mul, offset, uncertainty, tau)
 
-    def set_mw_needed(self, mw_needed, mul=1.0, offset=0.0, uncertainty=7.0, tau=0.002473):
+    def set_mw_needed(self, mw_needed, mul=1.0, offset=0.0, uncertainty=7.0, tau=1):
         """Assign a new hourly demand pattern and recompute all curves."""
         self.offset = offset
         self.uncertainty = uncertainty * mul
@@ -240,25 +241,25 @@ tau_power_empty = 1
 
 # Power Ranges 
 power_plant_max = 600.0 # Max power output of the plant in MW
-wind_power_max = 200.0  
+wind_power_max = 300.0  
 sun_power_max = 200.0 
 
 # Lookup Tables
 oven_temp_lookup = LookupTable(
-    [0.00, 0.20, 0.50, 0.80, 1.00],
-    [0.00, 0.20, 0.40, 0.70, 1.00])
+    [0.00, 0.20, 0.50, 0.75, 1.00],
+    [0.00, 0.20, 0.40, 0.60, 1.00])
 
 oven_disp_lookup = LookupTable(
-    [0.0, 0.1, 0.20, 0.3, 0.4, 0.5, 0.6, 0.7 , 0.8 , 0.9, 1.0],
-    [0.0, 0.2, 0.35, 0.5, 0.6, 0.7, 0.8, 0.85, 0.95, 1.0, 1.0])
+    [0.0, 0.1, 0.20, 0.3, 0.4, 0.5, 0.6 , 0.7 , 0.8 , 0.9, 1.0],
+    [0.0, 0.2, 0.35, 0.5, 0.6, 0.7, 0.85, 0.9 , 0.95, 1.0, 1.0])
 
 oven_pct_to_power_lookup = LookupTable(
     [0.0, 0.05, 0.2, 0.4, 0.8, 1.0],
     [0.0, 0.1 , 0.3, 0.5, 1.0, 1.0])
 
 air_to_power_lookup = LookupTable(
-    [0.0, 0.2, 0.5, 0.8, 1.0],
-    [0.0, 0.1, 0.4, 0.9, 1.0])
+    [0.0 , 0.2, 0.5, 0.8, 1.0],
+    [0.01, 0.1, 0.4, 0.9, 1.0])
 
 print(f"Wall-clock Ts = {Ts*1000:.1f} ms, Playback speed = {playback_speed}x")
 print(f"Simulation dt = {dt*3600:.1f} seconds/step, {dt*60:.2f} min/step")
@@ -269,8 +270,8 @@ print(f"N = {N} steps for 48 hours (runtime ~{N*Ts:.1f} seconds)")
 class EnergyRequirements:
     def __init__(self):
         # Set default curves for both electricity and heat; they can be changed independently at runtime using the set_mw_needed method
-        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, tau=4, offset= 3.0, mul=8.0)
-        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, tau=12, offset=-8.0, mul=9.0)
+        self.electricity = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, tau=4, offset= 100.0, mul=8.0)
+        self.heat        = EnergyRequirement(default_mw_needed, N=N, uncertainty=9.0, tau=12, offset=-80.0, mul=9.0)
 
     def get_total_need_vector(self):
         return self.electricity.need_vector + self.heat.need_vector
@@ -321,6 +322,9 @@ class WindGenerator:
 
     def activate(self, active):
         self.active = active
+
+    def isActive(self):
+        return self.active
     
     def calculate(self):
         if self.n >= self.N:
@@ -373,6 +377,9 @@ class SunGenerator:
     
     def activate(self, active):
         self.active = active
+
+    def isActive(self):
+        return self.active
 
     def calculate(self, td):
         sol = 0.0
@@ -573,13 +580,13 @@ class PowerPlant:
         self.oven_amount_ok_min = 16.0
         self.oven_amount_ok_max = 25.0
         self.oven_amount_to_fill = 3.0
-        self.oven_consumption_rate = 0.8
+        self.oven_consumption_rate = 1.0
         # Air flow state
         self.air_flow = 0.5
 
         # power generation state
         self.power_max = power_plant_max  # MW
-        self.calorific_scaling = 2.0
+        self.calorific_scaling = 1.7
         self.tau_up = tau_power_up
         self.tau_down = tau_power_down
         self.tau_empty = tau_power_empty
@@ -603,6 +610,9 @@ class PowerPlant:
 
     def activate(self, active):
         self.active = active
+
+    def isActive(self):
+        return self.active
 
     def get_storage_pct(self):
         return self.storage.fill_ratio()
@@ -724,8 +734,8 @@ class PowerPlant:
         airflow = self.air_flow
         airflow_squared = airflow * airflow
         airflow_cubed = airflow * airflow * airflow
-        moisture       = self.oven_waste.moisture_content
-        moisture = 0
+        # moisture       = self.oven_waste.moisture_content
+        moisture = 0.0
         energy_density = self.oven_waste.energy_density
 
         # --- Lambda: air-to-fuel ratio ---
@@ -769,7 +779,7 @@ class PowerPlant:
         else:
             net_calorific = energy_density * moisture_factor * self.calorific_scaling
             target_power  = air_to_power_lookup.get(airflow) * oven_pct_to_power_lookup.get(oven_pct) * net_calorific * combustion_eff * self.power_max
-            target_power  = max(0.0, target_power)
+            target_power  = max(0.0, min(self.power_max * 1.05, target_power))
 
             tau = self.tau_up if target_power > self.power_filter.get() else self.tau_down
             self.power_filter.update_tau(target_power, tau, dt)
@@ -916,16 +926,13 @@ plt.tight_layout()
 fig2 = create_plot_on_monitor(monitors[1 if FullScreen else 0], plot_heat)  # Assign to monitor 0
 plt.tight_layout()
 
-def sendElData():
+def send_osc_to_panel():
     oscSenderControlPanel.send_message("/OvenAmount", energy_grid.powerplant.oven_amount/energy_grid.powerplant.oven_amount_max)
-    oscSenderControlPanel.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
     oscSenderControlPanel.send_message("/PlantPower", energy_grid.powerplant.get_total_power_pct())
     oscSenderControlPanel.send_message("/WindPower", energy_grid.wind_generator.get_available_power(index)/energy_grid.wind_generator.max)
     oscSenderControlPanel.send_message("/SolarPower", energy_grid.sun_generator.get_available_power(index)/energy_grid.sun_generator.max)
     oscSenderControlPanel.send_message("/Acid", energy_grid.powerplant.get_acid_emission())
     oscSenderControlPanel.send_message("/CO", energy_grid.powerplant.get_CO_emission())
-    oscSenderControlPanel.send_message("/ElectricityPct", energy_grid.powerplant.get_electricity_pct())
-    # oscSenderControlPanel.send_message("/HeatPct", energy_grid.powerplant.get_heat_pct())
     oscSenderControlPanel.send_message("/PlantElectricPower", energy_grid.powerplant.get_electric_power_pct())
     oscSenderControlPanel.send_message("/OvenTemp", energy_grid.powerplant.get_oven_temperature_pct())
     oscSenderControlPanel.send_message("/CaCO3", energy_grid.powerplant.CaCO3_amount)
@@ -933,13 +940,38 @@ def sendElData():
     oscSenderControlPanel.send_message("/TurbinePct", energy_grid.powerplant.get_electricity_pct())
     oscSenderControlPanel.send_message("/OvenAirFlow", energy_grid.powerplant.get_air_flow())
     oscSenderControlPanel.send_message("/Buy", energy_grid.electric_market.get()/energy_grid.electric_market.max)
+
+def send_osc_to_oven_display():
     oscSenderOvenDisplay.send_message("/OvenIntensity", oven_disp_lookup.get(energy_grid.powerplant.get_total_power_pct()))
+
+def send_osc_to_storage_display():
     oscSenderStorageDisplay.send_message("/WasteStorage", energy_grid.powerplant.get_storage_pct())
 
+def send_osc_to_wall():
+    oscSenderWall.send_message("/Wall", [
+        energy_grid.powerplant.get_oven_temperature_pct(), # Ove
+        energy_grid.powerplant.get_electricity_pct(),
+        1 if energy_grid.wind_generator.isActive() else 0, 
+        1 if energy_grid.sun_generator.isActive() else 0,
+        1 if energy_grid.powerplant.isActive() else 0,
+        energy_grid.electric_market.get()/energy_grid.electric_market.max,
+        energy_grid.powerplant.CaCO3_amount,
+        energy_grid.powerplant.NaOH_amount,
+        ])
+
+def send_osc_reset():
+    oscSenderControlPanel.send_message("/Reset",1)
+    oscSenderOvenDisplay.send_message("/Reset",1)
+    oscSenderStorageDisplay.send_message("/Reset",1)
+    oscSenderWall.send_message("/Reset",1)
+
 # Non-blocking OSC sender using thread pool
-def sendElDataAsync():
+def send_osc_async():
     """Send OSC data in background thread to avoid blocking rendering"""
-    executor.submit(sendElData)
+    executor.submit(send_osc_to_panel)
+    executor.submit(send_osc_to_oven_display)
+    executor.submit(send_osc_to_storage_display)
+    executor.submit(send_osc_to_wall)
 
 def updatePlot():
     lel.set_xdata(x_values)
@@ -969,6 +1001,7 @@ def clear():
 
     updatePlot()
     updateHeatPlot()
+    send_osc_reset()
     
 def start(value):
     global run
@@ -995,7 +1028,7 @@ def calculate_score(i):
 
     if electricity_prod < electricity_min:
         score -= (electricity_min - electricity_prod) # Extra penalty for not meeting minimum electricity requirement
-        score -= abs(electricity_prod - electricity_need) * 0.2 # Penalize electricity mismatch
+        score -= abs(electricity_prod - electricity_need) # Penalize electricity mismatch
     else:
         score -= abs(electricity_prod - electricity_need) * 0.1 # Penalize electricity mismatch
 
@@ -1014,7 +1047,7 @@ def calculate_score(i):
     score -= abs(energy_grid.powerplant.oven_waste.acid_amount - energy_grid.powerplant.CaCO3_amount) * 10
     score -= abs(energy_grid.powerplant.oven_waste.co_amount   - energy_grid.powerplant.NaOH_amount) * 10
 
-    score = max(1,score)
+    score = max(1,score/10)
 
     # print(score)
     return score
@@ -1036,7 +1069,7 @@ def game_loop():
             heat_plot_values.append(energy_grid.get_total_heat(index))
             
             # Send OSC data at game loop frequency (faster updates every Ts wall-clock)
-            sendElData()
+            send_osc_async()
 
             point_score += calculate_score(index)
             # print(point_score)
@@ -1083,6 +1116,9 @@ def exit_program(event=None):
 def on_key_press(event):
     if event.key == 'escape':
         exit_program()
+    elif event.key == 'r':
+        clear()
+        start(True)
 
 
 def bind_exit_keys():
