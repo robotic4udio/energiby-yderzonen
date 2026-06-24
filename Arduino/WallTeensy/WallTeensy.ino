@@ -56,19 +56,22 @@ elapsedMillis ledOnMillis;
 #define N2_5 148 // House_to_HeatEx
 
 #define N3_1 283 // Boiler_to_HeatEx
+#define N4_1 46  // Pulse_to_House
+#define N4_2 10 // House Light
 
 const unsigned char NeoPixelPin[NUM_NEOPIXEL_STRIPS]   = { 34   , 35          , 36 , 37, 38, 39, 40, 41};
-const unsigned long NeoPixelCount[NUM_NEOPIXEL_STRIPS] = {N1_1+N1_2 , N2_1+N2_2+N2_3+N2_4+N2_5, N3_1, 20, 99, 100, 101, 102};
+const unsigned long NeoPixelCount[NUM_NEOPIXEL_STRIPS] = {N1_1+N1_2 , N2_1+N2_2+N2_3+N2_4+N2_5, N3_1, N4_1+N4_2, 99, 100, 101, 102};
 Adafruit_NeoPixel strip1(NeoPixelCount[0], NeoPixelPin[0], NEO_GRB + NEO_KHZ800); // 1 - PIN 34: Boiler + HeatEx_to_Boiler
 Adafruit_NeoPixel strip2(NeoPixelCount[1], NeoPixelPin[1], NEO_GRB + NEO_KHZ800); // 2 - PIN 35: HeatEx + HeatEx_to_House + Radiator + House_to_HeatEx
 Adafruit_NeoPixel strip3(NeoPixelCount[2], NeoPixelPin[2], NEO_GRB + NEO_KHZ800); // 3 - PIN 36: Boiler_to_HeatEx
-Adafruit_NeoPixel strip4(NeoPixelCount[3], NeoPixelPin[3], NEO_GRB + NEO_KHZ800); // 4 - PIN 37
+Adafruit_NeoPixel strip4(NeoPixelCount[3], NeoPixelPin[3], NEO_GRB + NEO_KHZ800); // 4 - PIN 37: House Light
 Adafruit_NeoPixel strip5(NeoPixelCount[4], NeoPixelPin[4], NEO_GRB + NEO_KHZ800); // 5 - PIN 38: Turb
 Adafruit_NeoPixel strip6(NeoPixelCount[5], NeoPixelPin[5], NEO_GRB + NEO_KHZ800); // 6 - PIN 39: Wind
 Adafruit_NeoPixel strip7(NeoPixelCount[6], NeoPixelPin[6], NEO_GRB + NEO_KHZ800); // 7 - PIN 40: Solar
 Adafruit_NeoPixel strip8(NeoPixelCount[7], NeoPixelPin[7], NEO_GRB + NEO_KHZ800); // 8 - PIN 41: Europa
 
 Adafruit_NeoPixel* strips[NUM_NEOPIXEL_STRIPS] = {&strip1, &strip2, &strip3, &strip4, &strip5, &strip6, &strip7, &strip8};
+
 
 elapsedMillis pixelUpdateMillis;
 unsigned long pixelUpdateInterval = 1;
@@ -113,6 +116,8 @@ uint32_t gainColor(uint32_t c, float gain){
   return Adafruit_NeoPixel::Color(r, g, b);
 };
 
+
+
 const uint32_t COLOR_OFF = Adafruit_NeoPixel::Color(0, 0, 0);
 const uint32_t COLOR_RED  = Adafruit_NeoPixel::Color(255, 0, 0);
 const uint32_t COLOR_GREEN= Adafruit_NeoPixel::Color(0, 255, 0);
@@ -128,6 +133,14 @@ uint32_t colorFromHeat(float heat){
 
   return COLOR_RED;
 }
+
+float colorGainFromEl(float value){
+  if(value < 0.4f){
+    return value*2.5f;
+  }
+  return 1.0f;
+}
+
 
 class LEDPulse {
 public:
@@ -147,7 +160,7 @@ public:
       }
 
       // Get pulse intensity based on position in pulse vector and distance from center of pulse
-      float a = pulse_vec[l];
+      float a = pulse_vec[l] * m_gain;
 
       if(color1 == color2){
         auto color = gainColor(color1, a);
@@ -175,13 +188,13 @@ public:
     m_reverse = reverse;
   }
 
-  void setRun(bool run){
+  void setRun(bool run, bool show=false){
     m_run = run;
     if(m_off_when_not_running && !run){
       for(int i=0; i<m_numPixels; i++){
         m_strip.setPixelColor(i+m_startPixel, color0);
       }
-      m_strip.show();
+      if(show) m_strip.show();
     }
   }
 
@@ -219,6 +232,10 @@ public:
     pixelsAfterGradient = after;
   }
 
+  void setGain(float gain){
+    m_gain = gain;
+  }
+
   Adafruit_NeoPixel& m_strip;
   bool m_reverse;
   int m_startPixel;
@@ -232,6 +249,8 @@ public:
 
   uint16_t pixelsBeforeGradient = 0;
   uint16_t pixelsAfterGradient = 0;
+
+  float m_gain = 1.0f;
 
 };
 
@@ -249,11 +268,12 @@ LEDPulse pulse_house_to_heatEx(strip2, false, N2_1+N2_2+N2_3+N2_4, N2_5);
 // Strip 3: Boiler_to_HeatEx
 LEDPulse pulse_boiler_to_heatEx(strip3, true, 0, N3_1);
 
-LEDPulse pulse_turb   (strip5, true);
-LEDPulse pulse_wind   (strip6, true);
-LEDPulse pulse_solar  (strip7, true);
-LEDPulse pulse_europa (strip8, true);
-
+auto& strip_house = strip4;
+LEDPulse pulse_turb    (strip5, true);
+LEDPulse pulse_wind    (strip6, true);
+LEDPulse pulse_solar   (strip7, true);
+LEDPulse pulse_europa  (strip8, true);
+LEDPulse pulse_to_house(strip4, false, 0, N4_1);
 
 bool gameRunning = false;
 
@@ -288,7 +308,7 @@ inline int wrap(int i, int N){
   return i;
 }
 
-OnePole elFilter  (0.02 ,1.0);
+OnePole elFilter  (0.05 ,1.0);
 OnePole heatFilter(0.01 ,1.0);
 
 float elAmount = 1.0;
@@ -449,12 +469,15 @@ bool loopOsc(){
         float caco3 = m.getFloat(6);
         float naoh = m.getFloat(7);
 
+        bool power_available = useWind || useSolar || (turbinePct > 0.05 && usePlant) || buy > 0.0f;
         heatAmount = ovenTemp;
+        elAmount = power_available ? 1.0f : 0.0f;
         pulse_turb.setRun(turbinePct > 0.05 && usePlant);
         pulse_wind.setRun(useWind);
         pulse_solar.setRun(useSolar);
         pulse_europa.setRun(buy != 0.0f);
         pulse_europa.setReverse(buy > 0.0f);
+        // pulse_to_house.setRun(power_available);
         lamp_NaOH.set_value(naoh * 255);
         lamp_CaCO3.set_value(caco3 * 255);
       });
@@ -478,7 +501,8 @@ void reset(){
 
   heatAmount = 1.0f;
   heatFilter.setValue(heatAmount);
-
+  elAmount = 1.0f;
+  elFilter.setValue(elAmount);
 
   pulse_heatEx_to_boiler.setColors(COLOR_BLUE, COLOR_BLUE);
   pulse_boiler.setColors(COLOR_RED, COLOR_BLUE);
@@ -494,15 +518,18 @@ void reset(){
 
   pulse_house_to_heatEx.setColors(COLOR_BLUE, COLOR_BLUE);
 
-  pulse_turb  .setColors(COLOR_YELLOW, COLOR_YELLOW);
-  pulse_wind  .setColors(COLOR_YELLOW, COLOR_YELLOW);
-  pulse_solar .setColors(COLOR_YELLOW, COLOR_YELLOW);
-  pulse_europa.setColors(COLOR_YELLOW, COLOR_YELLOW);
+  strip_house .fill(COLOR_WHITE, N4_1, N4_1+N4_2);
+  pulse_turb    .setColors(COLOR_YELLOW, COLOR_YELLOW);
+  pulse_wind    .setColors(COLOR_YELLOW, COLOR_YELLOW);
+  pulse_solar   .setColors(COLOR_YELLOW, COLOR_YELLOW);
+  pulse_europa  .setColors(COLOR_YELLOW, COLOR_YELLOW);
+  pulse_to_house.setColors(COLOR_YELLOW , COLOR_WHITE);
 
-  pulse_turb  .m_off_when_not_running = true;
-  pulse_wind  .m_off_when_not_running = true;
-  pulse_solar .m_off_when_not_running = true;
-  pulse_europa.m_off_when_not_running = true;
+  pulse_turb    .m_off_when_not_running = true;
+  pulse_wind    .m_off_when_not_running = true;
+  pulse_solar   .m_off_when_not_running = true;
+  pulse_europa  .m_off_when_not_running = true;
+  pulse_to_house.m_off_when_not_running = true;
 
   lamp_bag_filter.set_value(0);
   lamp_scrubber  .set_value(0);
@@ -515,6 +542,7 @@ void pixelLoop(){
   
   auto heat = heatFilter.process(heatAmount);
   auto hot_color = colorFromHeat(heat);
+  auto el   = elFilter  .process(elAmount);
   pulse_boiler          .setColor1(hot_color);
   pulse_boiler_to_heatEx.setColor(hot_color);
   pulse_heatEx1         .setColor1(hot_color);
@@ -533,10 +561,14 @@ void pixelLoop(){
   pulse_house_to_heatEx.update();
 
   // Electricity Meters
-  pulse_turb  .update();
-  pulse_wind  .update();
-  pulse_solar .update();
-  pulse_europa.update();
+  float house_color_gain = colorGainFromEl(el);
+  strip_house .fill(gainColor(COLOR_WHITE,house_color_gain), N4_1, N4_1+N4_2);
+  pulse_to_house.setGain(house_color_gain);
+  pulse_turb    .update();
+  pulse_wind    .update();
+  pulse_solar   .update();
+  pulse_europa  .update();
+  pulse_to_house.update();
 
   // strip show
   strip1.show();

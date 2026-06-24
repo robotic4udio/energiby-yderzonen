@@ -21,6 +21,9 @@ or "doublebuffer" for animation basics.
 #include <Bounce.h>
 #include <elapsedMillis.h>
 
+#define PRINT_DEBUG
+
+
 // ------------------------------------------------------------------------------------- //
 // -------------------------------------- The Storage of Waste ------------------------- //
 float storage = 1.0;
@@ -28,8 +31,10 @@ void set_storage(OSCMessage &msg)
 {
   if     (msg.isFloat(0) ) storage = msg.getFloat(0);
   else if(msg.isDouble(0)) storage = msg.getDouble(0);
+  #ifdef PRINT_DEBUG
   Serial.print("/WasteStorage: ");
   Serial.println(storage);
+  #endif
 }
 
 // ---------------------------------------------------------------------------- //
@@ -86,9 +91,10 @@ bool setupWiFi(){
 // -------------------------------------------------------------------------- //
 // ------------------ Matrix ------------------------------------------------ //
 // -------------------------------------------------------------------------- //
-#define HEIGHT  32 // Matrix height (pixels) - SET TO 64 FOR 64x64 MATRIX!
-#define WIDTH   64 // Matrix width (pixels)
+#define HEIGHT  32 // Physical panel height (pixels)
+#define WIDTH   64 // Physical panel width (pixels)
 #define MAX_FPS 45 // Maximum redraw rate, frames/second
+#define ROTATION 1 // 0=64x32, 1=32x64, 2=64x32 flipped, 3=32x64 flipped
 
 // MatrixPortal ESP32-S3
 uint8_t rgbPins[]  = {42, 41, 40, 38, 39, 37};
@@ -130,12 +136,13 @@ void err(int x) {
 
 void setup(void) {
   Serial.begin(115200);
-  while (!Serial) delay(10);
+  delay(2000);
 
   setupWiFi();
 
-
   ProtomatterStatus status = matrix.begin();
+  matrix.setRotation(ROTATION);
+
   Serial.printf("Protomatter begin() status: %d\n", status);
 
   colors[0] = matrix.color565(64, 64, 64);  // Dark Gray
@@ -145,7 +152,7 @@ void setup(void) {
   colors[4] = matrix.color565(255,237,  0); // Yellow
   colors[5] = matrix.color565(  0,128, 38); // Green
   colors[6] = matrix.color565(  0, 77,255); // Blue
-  colors[7] = matrix.color565(117,  7,135); // Purple
+  colors[7] = matrix.color565(255,  0,100); // Purple
 }
 
 // MAIN LOOP - RUNS ONCE PER FRAME OF ANIMATION ----------------------------
@@ -189,12 +196,18 @@ void loop() {
   // Update pixel data in LED driver
   dimension_t x, y;
   matrix.fillScreen(0x0);
-  for(int i=0; i<HEIGHT; i++) {
-    for(x=0; x<WIDTH*storage; x++) {
-      uint16_t color = colors[0];
-      matrix.drawPixel(x, i, color);
-      //Serial.printf("(%d, %d)\n", x, y);
-    }
+  int displayWidth = matrix.width();
+  int displayHeight = matrix.height();
+  int totalPixels = displayWidth * displayHeight;
+  int filledPixels = (int)(totalPixels * storage);
+  filledPixels = constrain(filledPixels, 0, totalPixels);
+
+  for(int p = 0; p < filledPixels; p++) {
+    x = p % displayWidth;
+    y = p / displayWidth;
+    uint16_t color = colors[7];
+    matrix.drawPixel(x, y, color);
+    //Serial.printf("(%d, %d)\n", x, y);
   }
 
   matrix.show(); // Copy data to matrix buffers
