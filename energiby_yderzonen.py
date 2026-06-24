@@ -28,7 +28,7 @@ import signal
 
 
 # Run is FullScreen on two displays?
-FullScreen = False
+FullScreen = True
 
 
 # ==================== RASPBERRY PI OPTIMIZATION ====================
@@ -877,7 +877,9 @@ def plot_electricity(fig):
     plt.fill_between(energy_grid.requirements.electricity.time_vector,
                      energy_grid.requirements.electricity.need_min_vector,
                      energy_grid.requirements.electricity.need_max_vector,
-                     label="Behov")
+                     color='red',
+                     alpha=0.4,
+                     label="El Behov")
     #lb, = ax.plot(x_values,b_values,'r-', label="Produktion") # Create a line with the data
     #lheat, = ax.plot(x_values,heat_plot_values,'b-', label="Vind") # Create a line with the data
     lel,  = plt.plot(x_values,el_plot_values,'k-', label="El Produktion") # Create a line with the data
@@ -894,7 +896,7 @@ def plot_electricity(fig):
         bbox=dict(facecolor='white', alpha=0.8, edgecolor='black')
     )
 
-    plt.legend(loc='upper left')
+    plt.legend(loc='upper left', fontsize=18)
     plt.grid(True)
 
 def plot_heat(fig):
@@ -911,10 +913,12 @@ def plot_heat(fig):
     plt.fill_between(energy_grid.requirements.heat.time_vector,
                      energy_grid.requirements.heat.need_min_vector,
                      energy_grid.requirements.heat.need_max_vector,
-                     label="Behov")
+                     color='green',
+                     alpha=0.4,
+                     label="Fjernvarme Behov")
     lheat, = ax.plot(x_values,heat_plot_values,'k-', label="Fjernvarme Produktion") # Create a line with the data
 
-    plt.legend(loc='upper left')
+    plt.legend(loc='upper left', fontsize=18)
     plt.grid(True)
 
 # Create plots on each monitor
@@ -1118,8 +1122,9 @@ def on_key_press(event):
         exit_program()
     elif event.key == 'r':
         clear()
+    elif event.key == 's':
+        clear()
         start(True)
-
 
 def bind_exit_keys():
     fig1.canvas.mpl_connect('key_press_event', on_key_press)
